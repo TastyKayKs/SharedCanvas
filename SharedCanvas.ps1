@@ -165,20 +165,20 @@ $CommsPosh.RunspacePool = $Runspace
     param($T,$S)
 
     If(!$S){
-        $AsyncCallback = [System.AsyncCallback]{
-            param($Result)
-            
-            $Client = $Srv.EndAcceptTcpClient($Result)
-            $Stream = $Client.GetStream()
+        $Srv = [System.Net.Sockets.TcpListener]::new("0.0.0.0", 42069)
+        $Srv.Start()
 
-            $Buff = [Byte[]]::new(1024)
-            While(!$T.Disposed -and $Client.Connected){
-                If($T.DeltaOut){
-                    $OutObj = "A"+[String]::Join("L", $T.FlattenedLines)+"Z"
-                    $OutObj = [System.Text.Encoding]::UTF8.GetBytes($OutObj)
-                    $Stream.Write($OutObj, 0, $OutObj.Length)
-                    $T.DeltaOut = $false
-                }
+        $Buff = [Byte[]]::new(1024)
+        $Streams = @()
+        While(!$T.Disposed){
+            If($Srv.Pending()){
+                $Streams+=$Srv.AcceptTcpClientAsync().Result.GetStream()
+            }
+
+            $OutObj = "A"+[String]::Join("L", $T.FlattenedLines)+"Z"
+            $OutObj = [System.Text.Encoding]::UTF8.GetBytes($OutObj)
+            ForEach($Stream in $Streams){
+                If($T.DeltaOut){$Stream.Write($OutObj, 0, $OutObj.Length)}
                 
                 If($Stream.DataAvailable){
                     $InObj = ""
@@ -216,22 +216,15 @@ $CommsPosh.RunspacePool = $Runspace
                         $Error[0] | Out-String | Out-file -Append C:\Temp\asyncErr.txt
                     }
                 }
-
-                Sleep -Milliseconds 250
             }
+            $T.DeltaOut = $false
 
-            $Client.Close()
-            $Client.Dispose()
+            Sleep -Milliseconds 250
         }
-        $Srv = [System.Net.Sockets.TcpListener]::new("0.0.0.0", 42069)
-        $Srv.Start()
-        $TESTCOUNT = 0
-        While(!$T.Disposed){
-            If($Srv.Pending()){
-                $Result = $Srv.BeginAcceptTcpClient($AsyncCallBack,$Srv)
-            }
-        }
+
+        ForEach($Stream in $Streams){$Stream.Close;$Stream.Dispose()}
         $Srv.Stop()
+
     }Else{
         $Client = [System.Net.Sockets.TcpClient]::New($S, 42069)
         $Stream = $Client.GetStream()
