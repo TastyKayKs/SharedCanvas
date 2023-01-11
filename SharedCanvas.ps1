@@ -157,8 +157,7 @@ $FreeDrawPosh.RunspacePool = $Runspace
 [Void]$FreeDrawPosh.AddParameter('T',$HashTable)
 $FreeDrawJob=$FreeDrawPosh.BeginInvoke()
 
-#Start Job to accept tcp connections and append the lines received to drawing table (clear incoming?)
-#Send out copy of lines (append to outgoing?)
+# Still need a clear button for the host
 
 $CommsPosh = [Powershell]::Create()
 $CommsPosh.RunspacePool = $Runspace
