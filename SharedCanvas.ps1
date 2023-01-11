@@ -5,6 +5,14 @@ Add-Type -AssemblyName System.Drawing
 
 $HashTable = [HashTable]::Synchronized(@{})
 $HashTable.Lines = @()
+$HashTable.FlattenedLines = [String[]]@()
+$HashTable.Disposed = $false
+$HashTable.DeltaIn = $false
+$HashTable.DeltaOut = $false
+
+$CPUs = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
+$Runspace = [RunspaceFactory]::CreateRunspacePool(1,$CPUs)
+$Runspace.Open()
 
 $Form = [System.Windows.Forms.Form]::new()
 $Form.Text = "Shared Canvas"
@@ -13,6 +21,8 @@ $Form.FormBorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
 $Form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
 $Form.Height = $Form.Width = 500
 $Form.Left = $Form.Top = 0
+
+$Jraphics = $Form.CreateGraphics()
 
 $Color = [System.windows.Forms.Button]::new()
 $Color.Text = "Color"
@@ -40,21 +50,57 @@ $Color.Add_Click({
 $Color.Parent = $Form
 
 $Size = [System.Windows.Forms.NumericUpDown]::new()
-$Size.Width = 245
+$Size.Width = 240
 $Size.Top = 2
 $Size.Left = 250
 $Size.Maximum = 100
 $Size.Minimum = 1
 $Size.Parent = $Form
 
-$FreeDrawRunspace = [RunspaceFactory]::CreateRunspace()
-$FreeDrawRunspace.Open()
+$SorterPosh = [Powershell]::Create()
+$SorterPosh.RunspacePool = $Runspace
+[Void]$SorterPosh.AddScript({
+    param($T)
+    While(!$T.Disposed){
+        $Sort = [String[]]($T.FlattenedLines | Sort {[int64]$_.Split(",")[0]})
+        If($Sort.Count -eq $T.Lines.Count -and ![System.Linq.Enumerable]::SequenceEqual($T.FlattenedLines, $Sort)){
+            $T.FlattenedLines = $Sort
+            $T.Lines = ($T.Lines | Sort {$_.TS})
+        }
+        Sleep -Milliseconds 25
+    }
+})
+[Void]$SorterPosh.AddParameter('T',$HashTable)
+$SorterJob=$SorterPosh.BeginInvoke()
+
+$GraphicsHandlerPosh = [Powershell]::Create()
+$GraphicsHandlerPosh.RunspacePool = $GraphicsHandlerRunspace
+[Void]$GraphicsHandlerPosh.AddScript({
+    param($J,$T)
+
+    $J = $J.Value
+    While(!$T.Disposed){
+        If($T.DeltaIn){
+            $J.Clear()
+            ForEach($Line in $T.Lines){
+                $J.DrawLines($Line.Pen, $Line.Pts)
+            }
+            $T.DeltaIn = $false
+        }
+        Sleep -Milliseconds 10
+    }
+})
+[Void]$GraphicsHandlerPosh.AddParameter('J',[ref]$Jraphics)
+[Void]$GraphicsHandlerPosh.AddParameter('T',$HashTable)
+$GraphicsHandlerJob=$GraphicsHandlerPosh.BeginInvoke()
+
 $FreeDrawPosh = [Powershell]::Create()
-$FreeDrawPosh.Runspace = $FreeDrawRunspace
+$FreeDrawPosh.RunspacePool = $Runspace
 [Void]$FreeDrawPosh.AddScript({
-    param($F,$T)
+    param($F,$J,$T)
 
     $F = $F.Value
+    $J = $J.Value
 
     Try{
         Add-Type -Namespace "User" -Name "Keys" -MemberDefinition '
@@ -63,34 +109,26 @@ $FreeDrawPosh.Runspace = $FreeDrawRunspace
         '
     }Catch{}
 
-    $Jraphics = $F.CreateGraphics()
-
     $Pen = [System.Drawing.Pen]::new([System.Drawing.Color]::Black)
 
     $LastHash = $T
-    While(!$F.IsDisposed){
-        If($T.Lines.Count -and $LastHash.Lines[-1] -ne $T.Lines[-1]){
-            $Jraphics.Clear()
-            $T.Lines | %{
-                $Jraphics.DrawLines($_.Pen,$_.Pts)
-            }
-        }
-
+    While(!$T.Disposed){
         $LastPos = [System.Windows.Forms.Cursor]::Position
         $LastPos.X-=$F.Left+4
         $LastPos.Y-=$F.Top+26
 
-        $Pen.Color = $F.Controls[0].BackColor
-        $Pen.Width = $F.Controls[1].Value
-
         $Points = [System.Drawing.Point[]]@()
         While([User.Keys]::GetKeyState(0x01) -lt 0){
             Sleep -Milliseconds 10
+            
             $CurrPos = [System.Windows.Forms.Cursor]::Position
             $CurrPos.X-=$F.Left+4
             $CurrPos.Y-=$F.Top+26
-            If($CurrPos.X -ne $LastPos.X -or $CurrPos.Y -ne $LastPos.Y){
-                $Jraphics.DrawLine($Pen, $LastPos.X, $LastPos.Y, $CurrPos.X, $CurrPos.Y)
+
+            $Pen.Color = $F.Controls[0].BackColor
+            $Pen.Width = $F.Controls[1].Value
+            If(($CurrPos.X -ne $LastPos.X -or $CurrPos.Y -ne $LastPos.Y) -and [User.Keys]::GetKeyState(0x01) -lt 0){
+                $J.DrawLine($Pen, $LastPos.X, $LastPos.Y, $CurrPos.X, $CurrPos.Y)
                 $Points+=($LastPos)
                 $Points+=($CurrPos)
             }
@@ -98,51 +136,50 @@ $FreeDrawPosh.Runspace = $FreeDrawRunspace
             $LastPos = [System.Windows.Forms.Cursor]::Position
             $LastPos.X-=$F.Left+4
             $LastPos.Y-=$F.Top+26
-            If($CurrPos.X -ne $LastPos.X -or $CurrPos.Y -ne $LastPos.Y){
-                $Jraphics.DrawLine($Pen, $CurrPos.X, $CurrPos.Y, $LastPos.X, $LastPos.Y)
+            If(($CurrPos.X -ne $LastPos.X -or $CurrPos.Y -ne $LastPos.Y) -and [User.Keys]::GetKeyState(0x01) -lt 0){
+                $J.DrawLine($Pen, $CurrPos.X, $CurrPos.Y, $LastPos.X, $LastPos.Y)
                 $Points+=($CurrPos)
                 $Points+=($LastPos)
             }
         }
 
-        If($Points.Count){
-            $T.Lines+=@{Pen=$Pen;Pts=$Points}
+        If($Points.Count -gt 2){
+            $TS = [datetime]::Now.ToFileTimeUtc()
+            $T.Lines+=@{TS=$TS;Pen=$Pen.Clone();Pts=$Points}
+            $T.FlattenedLines+=($TS.ToString()+"T"+$Pen.Color.ToArgb().ToString()+"C"+$Pen.Width.ToString()+"W"+[String]::Join("Y",$(ForEach($Pt in $Points){$Pt.X.ToString()+"X"+$Pt.Y.ToString()})))
+            $T.DeltaOut = $true
         }
-
-        $LastHash = $T
     }
 })
 [Void]$FreeDrawPosh.AddParameter('F',[ref]$Form)
+[Void]$FreeDrawPosh.AddParameter('J',[ref]$Jraphics)
 [Void]$FreeDrawPosh.AddParameter('T',$HashTable)
 $FreeDrawJob=$FreeDrawPosh.BeginInvoke()
 
 #Start Job to accept tcp connections and append the lines received to drawing table (clear incoming?)
 #Send out copy of lines (append to outgoing?)
 
-$CommsRunspace = [RunspaceFactory]::CreateRunspace()
-$CommsRunspace.Open()
 $CommsPosh = [Powershell]::Create()
-$CommsPosh.Runspace = $CommsRunspace
+$CommsPosh.RunspacePool = $Runspace
 [Void]$CommsPosh.AddScript({
-    param($F,$T,$S)
+    param($T,$S)
 
-    $WL = [System.Console]::WriteLine
-    $WL.Invoke("$($Debug) - Before if");$Debug++
-    
-    $F = $F.Value
-    $WL.Invoke("$($Debug) - past form ref");$Debug++
     If(!$S){
         $AsyncCallback = [System.AsyncCallback]{
             param($Result)
-            $WL.Invoke("$($Debug) - top of async callback");$Debug++
-            $LastHash = $T
-            $WL.Invoke("$($Debug) - async set last hash");$Debug++
+            
             $Client = $Srv.EndAcceptTcpClient($Result)
             $Stream = $Client.GetStream()
-            $WL.Invoke("$($Debug) - async get stream");$Debug++
+
             $Buff = [Byte[]]::new(1024)
-            While(!$F.IsDisposed -and $Client.Connected){
-                $WL.Invoke("$($Debug) - async top of while");$Debug++
+            While(!$T.Disposed -and $Client.Connected){
+                If($T.DeltaOut){
+                    $OutObj = "A"+[String]::Join("L", $T.FlattenedLines)+"Z"
+                    $OutObj = [System.Text.Encoding]::UTF8.GetBytes($OutObj)
+                    $Stream.Write($OutObj, 0, $OutObj.Length)
+                    $T.DeltaOut = $false
+                }
+                
                 If($Stream.DataAvailable){
                     $InObj = ""
                     While($Stream.DataAvailable){
@@ -150,31 +187,37 @@ $CommsPosh.Runspace = $CommsRunspace
                         $InObj+=[System.Text.Encoding]::UTF8.GetString($Buff[0..($InCount-1)])
                     }
                     Try{
-                        $InObj = [System.Management.Automation.PSSerializer]::Deserialize($InObj)
-                        If($InObj.Lines.Count){
-                            $InObj.Lines | %{
-                                $T.Lines+=@{Pen=$_.Pen;Pts=$_.Pts}
+                        If($InObj -match "A" -and $InObj -match "Z"){
+                            ForEach($Line in ($InObj -replace "^.*?A" -replace "Z.*").Split("L")){
+                                If(!$T.FlattenedLines.Contains($Line)){
+                                    $T.FlattenedLines+=$Line
+
+                                    $T.Lines+=@{
+                                        TS=[int64]($Line -replace "T.*");
+                                        Pen=[System.Drawing.Pen]::new(
+                                            [System.Drawing.Color]::FromArgb([int]($Line -replace "^.*?T" -replace "C.*")),
+                                            [Int]($Line -replace "^.*?C" -replace "W.*")
+                                        );
+                                        Pts=[System.Drawing.Point[]]$(
+                                            ForEach($Coords in ($Line -replace "^.*?W").Split("Y")){
+                                                [System.Drawing.Point]::new(
+                                                    [int]($Coords -replace "X.*"),
+                                                    [int]($Coords -replace "^.*?X")
+                                                )
+                                            }
+                                        )
+                                    }
+                                    $T.DeltaIn = $true
+                                }
                             }
                         }
-                        $InObj | Out-File C:\Temp\Goodsrv.txt
                     }Catch{
                         $InObj | Out-File C:\Temp\Badsrv.txt
+                        $Error[0] | Out-String | Out-file -Append C:\Temp\asyncErr.txt
                     }
-                    $WL.Invoke("$($Debug) - readins");$Debug++
-                    $WL.Invoke("$($Debug) - $($Error[0])");$Debug++
-                    $Error[0] | Out-String | Out-file -Append C:\Temp\asyncErr.txt
                 }
 
-                If($T.Lines.Count<# -and $LastHash.Lines[-1] -ne $T.Lines[-1]#>){
-                    $OutObj = $(ForEach($Line in $T.Lines){$Line.Pen.Color.ToArgb().ToString()+";"+[String]::Join(".",$(ForEach($Pt in $Line.Pts){$Pt.X.ToString()+","+$Pt.Y.ToString()}))})
-                    $OutObj = [System.Text.Encoding]::UTF8.GetBytes($OutObj)
-                    $Stream.Write($OutObj, 0, $OutObj.Length)
-                    $WL.Invoke("$($Debug) - writeouts");$Debug++
-                }
-
-                $LastHash = $T
-
-                Sleep -Milliseconds 500
+                Sleep -Milliseconds 250
             }
 
             $Client.Close()
@@ -182,20 +225,26 @@ $CommsPosh.Runspace = $CommsRunspace
         }
         $Srv = [System.Net.Sockets.TcpListener]::new("0.0.0.0", 42069)
         $Srv.Start()
-        While(!$F.IsDisposed){
+        $TESTCOUNT = 0
+        While(!$T.Disposed){
             If($Srv.Pending()){
                 $Result = $Srv.BeginAcceptTcpClient($AsyncCallBack,$Srv)
             }
         }
         $Srv.Stop()
     }Else{
-        $LastHash = $T
-
         $Client = [System.Net.Sockets.TcpClient]::New($S, 42069)
         $Stream = $Client.GetStream()
 
         $Buff = [Byte[]]::new(1024)
-        While(!$F.IsDisposed -and $Client.Connected){
+        While(!$T.Disposed -and $Client.Connected){
+            If($T.DeltaOut){
+                $OutObj = "A"+[String]::Join("L", $T.FlattenedLines)+"Z"
+                $OutObj = [System.Text.Encoding]::UTF8.GetBytes($OutObj)
+                $Stream.Write($OutObj, 0, $OutObj.Length)
+                $T.DeltaOut = $false
+            }
+
             If($Stream.DataAvailable){
                 $InObj = ""
                 While($Stream.DataAvailable){
@@ -203,41 +252,43 @@ $CommsPosh.Runspace = $CommsRunspace
                     $InObj+=[System.Text.Encoding]::UTF8.GetString($Buff[0..($InCount-1)])
                 }
                 Try{
-                    $InObj = [System.Management.Automation.PSSerializer]::Deserialize($InObj)
-                    If($InObj.Lines.Count){
-                        $InObj.Lines | %{
-                            $T.Lines+=@{Pen=$_.Pen;Pts=$_.Pts}
+                    If($InObj -match "A" -and $InObj -match "Z"){
+                        ForEach($Line in ($InObj -replace "^.*?A" -replace "Z.*").Split("L")){
+                            If(!$T.FlattenedLines.Contains($Line)){
+                                $T.FlattenedLines+=$Line
+
+                                $T.Lines+=@{
+                                    TS=[int64]($Line -replace "T.*");
+                                    Pen=[System.Drawing.Pen]::new(
+                                        [System.Drawing.Color]::FromArgb([int]($Line -replace "^.*?T" -replace "C.*")),
+                                        [Int]($Line -replace "^.*?C" -replace "W.*")
+                                    );
+                                    Pts=[System.Drawing.Point[]]$(
+                                        ForEach($Coords in ($Line -replace "^.*?W").Split("Y")){
+                                            [System.Drawing.Point]::new(
+                                                [int]($Coords -replace "X.*"),
+                                                [int]($Coords -replace "^.*?X")
+                                            )
+                                        }
+                                    )
+                                }
+                                $T.DeltaIn = $true
+                            }
                         }
                     }
-                    $InObj | Out-File C:\Temp\Goodcli.txt
                 }Catch{
                     $InObj | Out-File C:\Temp\Badcli.txt
+                    $Error[0] | Out-String | Out-file -Append C:\Temp\asyncErr.txt
                 }
-                #$InObj.Lines | %{
-                #    $T.Lines+=@{Pen=$_.Pen;Pts=$_.Pts}
-                #}
-                $WL.Invoke("$($Debug) - readinc");$Debug++
-                $WL.Invoke("$($Debug) - $($Error[0])");$Debug++
-                $Error[0] | Out-String | Out-file -Append C:\Temp\asyncErr.txt
             }
 
-            If($T.Lines.Count<# -and $LastHash.Lines[-1] -ne $T.Lines[-1]#>){
-                $OutObj = [System.Management.Automation.PSSerializer]::Serialize($T)
-                $OutObj = [System.Text.Encoding]::UTF8.GetBytes($OutObj)
-                $Stream.Write($OutObj, 0, $OutObj.Length)
-                $WL.Invoke("$($Debug) - writeoutc");$Debug++
-            }
-
-            $LastHash = $T
-
-            Sleep -Milliseconds 500
+            Sleep -Milliseconds 250
         }
 
         $Client.Close()
         $Client.Dispose()
     }
 })
-[Void]$CommsPosh.AddParameter('F',[ref]$Form)
 [Void]$CommsPosh.AddParameter('T',$HashTable)
 [Void]$CommsPosh.AddParameter('S',$Server)
 $CommsJob=$CommsPosh.BeginInvoke()
@@ -245,8 +296,10 @@ $CommsJob=$CommsPosh.BeginInvoke()
 $Form.ShowDialog()
 $Form.Dispose()
 
-[Void]$FreeDrawPosh.EndInvoke($FreeDrawJob)
-$FreeDrawRunspace.Close()
+$HashTable.Disposed = $true
 
+[Void]$SorterPosh.EndInvoke($SorterJob)
+[Void]$GraphicsHandlerPosh.EndInvoke($GraphicsHandlerJob)
+[Void]$FreeDrawPosh.EndInvoke($FreeDrawJob)
 [Void]$CommsPosh.EndInvoke($CommsJob)
-$CommsRunspace.Close()
+$Runspace.Close()
