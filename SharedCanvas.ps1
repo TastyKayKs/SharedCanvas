@@ -11,6 +11,7 @@ $HashTable.DeltaIn = $false
 $HashTable.DeltaOut = $false
 
 $CPUs = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
+If($CPUs -lt 4){$CPUs = 4} #Lol, trash computers
 $Runspace = [RunspaceFactory]::CreateRunspacePool(1,$CPUs)
 $Runspace.Open()
 
@@ -50,7 +51,7 @@ $Color.Add_Click({
 $Color.Parent = $Form
 
 $Size = [System.Windows.Forms.NumericUpDown]::new()
-$Size.Width = 240
+$Size.Width = 235
 $Size.Top = 2
 $Size.Left = 250
 $Size.Maximum = 100
@@ -117,21 +118,21 @@ $FreeDrawPosh.RunspacePool = $Runspace
         $LastPos.X-=$F.Left+4
         $LastPos.Y-=$F.Top+26
 
+        $Pen.Color = $F.Controls[0].BackColor
+        $Pen.Width = $F.Controls[1].Value
+
         $Points = [System.Drawing.Point[]]@()
         While([User.Keys]::GetKeyState(0x01) -lt 0){
             Sleep -Milliseconds 10
-            
             $CurrPos = [System.Windows.Forms.Cursor]::Position
             $CurrPos.X-=$F.Left+4
             $CurrPos.Y-=$F.Top+26
-
-            $Pen.Color = $F.Controls[0].BackColor
-            $Pen.Width = $F.Controls[1].Value
             If(($CurrPos.X -ne $LastPos.X -or $CurrPos.Y -ne $LastPos.Y) -and [User.Keys]::GetKeyState(0x01) -lt 0){
                 $J.DrawLine($Pen, $LastPos.X, $LastPos.Y, $CurrPos.X, $CurrPos.Y)
                 $Points+=($LastPos)
                 $Points+=($CurrPos)
             }
+            
             Sleep -Milliseconds 10
             $LastPos = [System.Windows.Forms.Cursor]::Position
             $LastPos.X-=$F.Left+4
