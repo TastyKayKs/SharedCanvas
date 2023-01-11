@@ -1,4 +1,4 @@
-$Server = "127.0.0.1"
+$Server = ""
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -6,7 +6,7 @@ Add-Type -AssemblyName System.Drawing
 $HashTable = [HashTable]::Synchronized(@{})
 $HashTable.Lines = @()
 $HashTable.Hashes = [String[]]@()
-$HashTable.Delta = $true
+$HashTable.Delta = $false
 
 $Form = [System.Windows.Forms.Form]::new()
 $Form.Text = "Shared Canvas"
@@ -71,19 +71,18 @@ $FreeDrawPosh.Runspace = $FreeDrawRunspace
 
     $LastHash = $T
     While(!$F.IsDisposed){
-        If($T.Lines.Count -and $LastHash.Lines[-1] -ne $T.Lines[-1]){
+        If($T.Delta){
             $Jraphics.Clear()
-            $T.Lines | %{
+            $T.Lines | Sort {$_.TS} | %{
                 $Jraphics.DrawLines($_.Pen,$_.Pts)
             }
+            $T.Delta = $false
+            [Console]::WriteLine("Draw")
         }
 
         $LastPos = [System.Windows.Forms.Cursor]::Position
         $LastPos.X-=$F.Left+4
         $LastPos.Y-=$F.Top+26
-
-        $Pen.Color = $F.Controls[0].BackColor
-        $Pen.Width = $F.Controls[1].Value
 
         $Points = [System.Drawing.Point[]]@()
         While([User.Keys]::GetKeyState(0x01) -lt 0){
@@ -92,6 +91,8 @@ $FreeDrawPosh.Runspace = $FreeDrawRunspace
             $CurrPos.X-=$F.Left+4
             $CurrPos.Y-=$F.Top+26
             If($CurrPos.X -ne $LastPos.X -or $CurrPos.Y -ne $LastPos.Y){
+                $Pen.Color = $F.Controls[0].BackColor
+                $Pen.Width = $F.Controls[1].Value
                 $Jraphics.DrawLine($Pen, $LastPos.X, $LastPos.Y, $CurrPos.X, $CurrPos.Y)
                 $Points+=($LastPos)
                 $Points+=($CurrPos)
@@ -101,6 +102,8 @@ $FreeDrawPosh.Runspace = $FreeDrawRunspace
             $LastPos.X-=$F.Left+4
             $LastPos.Y-=$F.Top+26
             If($CurrPos.X -ne $LastPos.X -or $CurrPos.Y -ne $LastPos.Y){
+                $Pen.Color = $F.Controls[0].BackColor
+                $Pen.Width = $F.Controls[1].Value
                 $Jraphics.DrawLine($Pen, $CurrPos.X, $CurrPos.Y, $LastPos.X, $LastPos.Y)
                 $Points+=($CurrPos)
                 $Points+=($LastPos)
@@ -108,12 +111,11 @@ $FreeDrawPosh.Runspace = $FreeDrawRunspace
         }
 
         If($Points.Count){
-            $T.Lines+=@{Pen=$Pen;Pts=$Points}
-            $T.Hashes+=($Pen.Color.ToArgb().ToString()+","+$Pen.Width.ToString()+","+[String]::Join(",",$(ForEach($Pt in $Points){$Pt.X.ToString()+"."+$Pt.Y.ToString()})))
+            $TS = [datetime]::Now.ToFileTimeUtc()
+            $T.Lines+=@{TS=$TS;Pen=$Pen;Pts=$Points}
+            $T.Hashes+=($TS.ToString()+","+$Pen.Color.ToArgb().ToString()+","+$Pen.Width.ToString()+","+[String]::Join(",",$(ForEach($Pt in $Points){$Pt.X.ToString()+"."+$Pt.Y.ToString()})))
             $T.Delta = $true
         }
-
-        $LastHash = $T
     }
 })
 [Void]$FreeDrawPosh.AddParameter('F',[ref]$Form)
@@ -134,14 +136,23 @@ $CommsPosh.Runspace = $CommsRunspace
     If(!$S){
         $AsyncCallback = [System.AsyncCallback]{
             param($Result)
-            $LastHash = $T
+            
             $Client = $Srv.EndAcceptTcpClient($Result)
             $Stream = $Client.GetStream()
+
             $Buff = [Byte[]]::new(1024)
             While(!$F.IsDisposed -and $Client.Connected){
-                $NewLines = @()
-                $SkipLines = @()
-
+                If($T.Delta){
+                    $OutObj = [String]::Join(";",$(ForEach($Hash in ($T.Hashes | Sort {[int64]$_.Split(",")[0]})){$Hash}))
+                    $OutObj = [System.Text.Encoding]::UTF8.GetBytes($OutObj)
+                
+                    If($OutObj){
+                        $Stream.Write([byte][char]"A", 0, 1)
+                        $Stream.Write($OutObj, 0, $OutObj.Length)
+                        $Stream.Write([byte][char]"Z", 0, 1)
+                    }
+                }
+                
                 If($Stream.DataAvailable){
                     $InObj = ""
                     While($Stream.DataAvailable){
@@ -151,16 +162,17 @@ $CommsPosh.Runspace = $CommsRunspace
                     }
                     Try{
                         If($InObj -match "A" -and $InObj -match "Z"){
-                            ForEach($Line in ($InObj.Split("Z") | Select -First 1).Split(";")){
+                            ForEach($Line in (($InObj.Split("Z") | Select -First 1).Split("A") | Select -Last 1).Split(";")){
                                 If(!$T.Hashes.Contains($Line)){
                                     $SplitLine = $Line.Split(',')
-                                    $Color = [System.Drawing.Color]::FromArgb([int]($SplitLine[0].Replace("A","")))
+                                    $Time = [int64]($SplitLine[0])
+                                    $Color = [System.Drawing.Color]::FromArgb([int]($SplitLine[1]))
                                     $Pen = [System.Drawing.Pen]::new($Color)
-                                    $Pen.Width = [Int]$SplitLine[1]
-                                    $T.Lines+=@{Pen=$Pen;Pts=[System.Drawing.Point[]]$(ForEach($Point in $SplitLine[2..($SplitLine.Count-1)]){$Coords = $Point.Split("."); [System.Drawing.Point]::new([int]$Coords[0],[int]$Coords[1])})}
-                                    $NewLines+=$Line
-                                }Else{
-                                    $SkipLines+=$Line
+                                    $Pen.Width = [Int]$SplitLine[2]
+                                    $T.Lines+=@{TS=$Time;Pen=$Pen;Pts=[System.Drawing.Point[]]$(ForEach($Point in $SplitLine[3..($SplitLine.Count-1)]){$Coords = $Point.Split("."); [System.Drawing.Point]::new([int]$Coords[0],[int]$Coords[1])})}
+                                    $T.Hashes+=$Line
+
+                                    $T.Delta = $true
                                 }
                             }
                         }
@@ -169,21 +181,6 @@ $CommsPosh.Runspace = $CommsRunspace
                         $Error[0] | Out-String | Out-file -Append C:\Temp\asyncErr.txt
                     }
                 }
-
-                If($T.Lines.Count -and $T.Delta){
-                    $OutObj = [String]::Join(";",$(ForEach($Hash in $T.Hashes){If(!$NewLines.Contains($Hash) -and !$SkipLines.Contains($Hash)){$Hash}}))
-                    $OutObj = [System.Text.Encoding]::UTF8.GetBytes($OutObj)
-                    
-                    If($OutObj){
-                        $Stream.Write([byte][char]"A", 0, 1)
-                        $Stream.Write($OutObj, 0, $OutObj.Length)
-                        $Stream.Write([byte][char]"Z", 0, 1)
-                    }
-
-                    $T.Delta = $false
-                }
-
-                $LastHash = $T
 
                 Sleep -Milliseconds 500
             }
@@ -200,16 +197,23 @@ $CommsPosh.Runspace = $CommsRunspace
         }
         $Srv.Stop()
     }Else{
-        $LastHash = $T
 
         $Client = [System.Net.Sockets.TcpClient]::New($S, 42069)
         $Stream = $Client.GetStream()
 
         $Buff = [Byte[]]::new(1024)
         While(!$F.IsDisposed -and $Client.Connected){
-            $NewLines = @()
-            $SkipLines = @()
-            
+            If($T.Delta){
+                $OutObj = [String]::Join(";",$(ForEach($Hash in ($T.Hashes | Sort {[int64]$_.Split(",")[0]})){$Hash}))
+                $OutObj = [System.Text.Encoding]::UTF8.GetBytes($OutObj)
+                
+                If($OutObj){
+                    $Stream.Write([byte][char]"A", 0, 1)
+                    $Stream.Write($OutObj, 0, $OutObj.Length)
+                    $Stream.Write([byte][char]"Z", 0, 1)
+                }
+            }
+
             If($Stream.DataAvailable){
                 $InObj = ""
                 While($Stream.DataAvailable){
@@ -219,16 +223,17 @@ $CommsPosh.Runspace = $CommsRunspace
                 }
                 Try{
                     If($InObj -match "A" -and $InObj -match "Z"){
-                        ForEach($Line in ($InObj.Split("Z") | Select -First 1).Split(";")){
+                        ForEach($Line in (($InObj.Split("Z") | Select -First 1).Split("A") | Select -Last 1).Split(";")){
                             If(!$T.Hashes.Contains($Line)){
                                 $SplitLine = $Line.Split(',')
-                                $Color = [System.Drawing.Color]::FromArgb([int]($SplitLine[0].Replace("A","")))
+                                $Time = [int64]($SplitLine[0])
+                                $Color = [System.Drawing.Color]::FromArgb([int]($SplitLine[1]))
                                 $Pen = [System.Drawing.Pen]::new($Color)
-                                $Pen.Width = [Int]$SplitLine[1]
-                                $T.Lines+=@{Pen=$Pen;Pts=[System.Drawing.Point[]]$(ForEach($Point in $SplitLine[2..($SplitLine.Count-1)]){$Coords = $Point.Split("."); [System.Drawing.Point]::new([int]$Coords[0],[int]$Coords[1])})}
-                                $NewLines+=$Line
-                            }Else{
-                                $SkipLines+=$Line
+                                $Pen.Width = [Int]$SplitLine[2]
+                                $T.Lines+=@{TS=$Time;Pen=$Pen;Pts=[System.Drawing.Point[]]$(ForEach($Point in $SplitLine[3..($SplitLine.Count-1)]){$Coords = $Point.Split("."); [System.Drawing.Point]::new([int]$Coords[0],[int]$Coords[1])})}
+                                $T.Hashes+=$Line
+
+                                $T.Delta = $true
                             }
                         }
                     }
@@ -237,21 +242,6 @@ $CommsPosh.Runspace = $CommsRunspace
                     $Error[0] | Out-String | Out-file -Append C:\Temp\asyncErr.txt
                 }
             }
-
-            If($T.Lines.Count -and $T.Delta){
-                $OutObj = [String]::Join(";",$(ForEach($Hash in $T.Hashes){If(!$NewLines.Contains($Hash) -and !$SkipLines.Contains($Hash)){$Hash}}))
-                $OutObj = [System.Text.Encoding]::UTF8.GetBytes($OutObj)
-                        
-                If($OutObj){
-                    $Stream.Write([byte][char]"A", 0, 1)
-                    $Stream.Write($OutObj, 0, $OutObj.Length)
-                    $Stream.Write([byte][char]"Z", 0, 1)
-                }
-
-                $T.Delta = $false
-            }
-
-            $LastHash = $T
 
             Sleep -Milliseconds 500
         }
