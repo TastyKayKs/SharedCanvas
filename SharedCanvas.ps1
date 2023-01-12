@@ -1,7 +1,10 @@
 $Server = ""
 
-Add-Type -AssemblyName System.Windows.Forms
+$lol = $false
+
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.Application]::EnableVisualStyles()
 
 $HashTable = [HashTable]::Synchronized(@{})
 $HashTable.Lines = @()
@@ -9,7 +12,8 @@ $HashTable.FlattenedLines = [String[]]@()
 $HashTable.Disposed = $false
 $HashTable.DeltaIn = $false
 $HashTable.DeltaOut = $false
-$HashTable.Clear = $false
+$HashTable.OffsetX = 4
+$HashTable.OffsetY = 26
 
 $CPUs = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
 If($CPUs -lt 4){$CPUs = 4} #Lol, trash computers
@@ -21,14 +25,51 @@ $Form.Text = "Shared Canvas"
 $Form.MaximizeBox = $false
 $Form.FormBorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
 $Form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
-$Form.Height = $Form.Width = 500
+$Form.Height = $Form.Width = 750
 $Form.Left = $Form.Top = 0
+
+If($lol){
+    $Form.FormBorderStyle = [System.Windows.Forms.BorderStyle]::None
+    $Form.TransparencyKey = $Form.BackColor
+    $Form.AllowTransparency = $true
+    $Form.Height = $Form.Width = 5000
+
+    $Form.Show()
+    $Form.TopMost = $true
+    $Form.TopMost = $false # ~~~~
+    $Form.TopMost = $true
+    $Form.Hide()
+
+    $HashTable.OffsetX = 0
+    $HashTable.OffsetY = 0
+}
 
 $Jraphics = $Form.CreateGraphics()
 
+$Quit = [System.windows.Forms.Button]::new()
+$Quit.Text = "Quit"
+$Quit.Width = 75
+$Quit.Add_Click({$This.Parent.Close()})
+$Quit.Parent = $Form
+
+$Clear = [System.windows.Forms.Button]::new()
+$Clear.Text = "Clear"
+$Clear.Left = 75
+$Clear.Width = 75
+$Clear.Add_Click({
+    $HashTable.Lines = @()
+    $HashTable.FlattenedLines = [String[]]@()
+    $HashTable.Clear = $true
+    $HashTable.DeltaOut = $true
+
+    $Form.Refresh()
+})
+$Clear.Parent = $Form
+
 $Color = [System.windows.Forms.Button]::new()
 $Color.Text = "Color"
-$Color.Width = 250
+$Color.Left = 600
+$Color.Width = 75
 $Color.BackColor = [System.Drawing.Color]::Black
 $Color.ForeColor = [System.Drawing.Color]::White
 $Color.Add_Click({
@@ -49,22 +90,12 @@ $Color.Add_Click({
         $This.ForeColor = [System.Drawing.Color]::White
     }
 })
-$Color.Add_MouseUp({
-    If($_.Button -eq [System.Windows.Forms.MouseButtons]::Right){
-        $HashTable.Lines = @()
-        $HashTable.FlattenedLines = [String[]]@()
-        $HashTable.Clear = $true
-        $HashTable.DeltaOut = $true
-
-        $Form.Refresh()
-    }
-})
 $Color.Parent = $Form
 
 $Size = [System.Windows.Forms.NumericUpDown]::new()
-$Size.Width = 235
+$Size.Width = 58
 $Size.Top = 2
-$Size.Left = 250
+$Size.Left = 675
 $Size.Maximum = 100
 $Size.Minimum = 1
 $Size.Parent = $Form
@@ -128,18 +159,18 @@ $FreeDrawPosh.RunspacePool = $Runspace
     $LastHash = $T
     While(!$T.Disposed){
         $LastPos = [System.Windows.Forms.Cursor]::Position
-        $LastPos.X-=$F.Left+4
-        $LastPos.Y-=$F.Top+26
+        $LastPos.X-=$F.Left+$T.OffsetX
+        $LastPos.Y-=$F.Top+$T.OffsetY
 
-        $Pen.Color = $F.Controls[0].BackColor
-        $Pen.Width = $F.Controls[1].Value
+        $Pen.Color = $F.Controls[2].BackColor
+        $Pen.Width = $F.Controls[3].Value
 
         $Points = [System.Drawing.Point[]]@()
         While([User.Keys]::GetKeyState(0x01) -lt 0){
             Sleep -Milliseconds 10
             $CurrPos = [System.Windows.Forms.Cursor]::Position
-            $CurrPos.X-=$F.Left+4
-            $CurrPos.Y-=$F.Top+26
+            $CurrPos.X-=$F.Left+$T.OffsetX
+            $CurrPos.Y-=$F.Top+$T.OffsetY
             If(($CurrPos.X -ne $LastPos.X -or $CurrPos.Y -ne $LastPos.Y) -and [User.Keys]::GetKeyState(0x01) -lt 0){
                 $J.DrawLine($Pen, $LastPos.X, $LastPos.Y, $CurrPos.X, $CurrPos.Y)
                 $Points+=($LastPos)
@@ -148,8 +179,8 @@ $FreeDrawPosh.RunspacePool = $Runspace
             
             Sleep -Milliseconds 10
             $LastPos = [System.Windows.Forms.Cursor]::Position
-            $LastPos.X-=$F.Left+4
-            $LastPos.Y-=$F.Top+26
+            $LastPos.X-=$F.Left+$T.OffsetX
+            $LastPos.Y-=$F.Top+$T.OffsetY
             If(($CurrPos.X -ne $LastPos.X -or $CurrPos.Y -ne $LastPos.Y) -and [User.Keys]::GetKeyState(0x01) -lt 0){
                 $J.DrawLine($Pen, $CurrPos.X, $CurrPos.Y, $LastPos.X, $LastPos.Y)
                 $Points+=($CurrPos)
