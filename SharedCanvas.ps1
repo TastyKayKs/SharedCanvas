@@ -36,7 +36,7 @@ If($lol){
 
     $Form.Show()
     $Form.TopMost = $true
-    $Form.TopMost = $false # ~~~~
+    $Form.TopMost = $false
     $Form.TopMost = $true
     $Form.Hide()
 
