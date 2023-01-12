@@ -9,6 +9,7 @@ $HashTable.FlattenedLines = [String[]]@()
 $HashTable.Disposed = $false
 $HashTable.DeltaIn = $false
 $HashTable.DeltaOut = $false
+$HashTable.Clear = $false
 
 $CPUs = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
 If($CPUs -lt 4){$CPUs = 4} #Lol, trash computers
@@ -48,6 +49,16 @@ $Color.Add_Click({
         $This.ForeColor = [System.Drawing.Color]::White
     }
 })
+$Color.Add_MouseUp({
+    If($_.Button -eq [System.Windows.Forms.MouseButtons]::Right){
+        $HashTable.Lines = @()
+        $HashTable.FlattenedLines = [String[]]@()
+        $HashTable.Clear = $true
+        $HashTable.DeltaOut = $true
+
+        $Form.Refresh()
+    }
+})
 $Color.Parent = $Form
 
 $Size = [System.Windows.Forms.NumericUpDown]::new()
@@ -63,11 +74,13 @@ $SorterPosh.RunspacePool = $Runspace
 [Void]$SorterPosh.AddScript({
     param($T)
     While(!$T.Disposed){
-        $Sort = [String[]]($T.FlattenedLines | Sort {[int64]$_.Split(",")[0]})
-        If($Sort.Count -eq $T.Lines.Count -and ![System.Linq.Enumerable]::SequenceEqual($T.FlattenedLines, $Sort)){
-            $T.FlattenedLines = $Sort
-            $T.Lines = ($T.Lines | Sort {$_.TS})
-        }
+        Try{
+            $Sort = [String[]]($T.FlattenedLines | Sort {[int64]$_.Split(",")[0]})
+            If($Sort.Count -eq $T.Lines.Count -and ![System.Linq.Enumerable]::SequenceEqual($T.FlattenedLines, $Sort)){
+                $T.FlattenedLines = $Sort
+                $T.Lines = ($T.Lines | Sort {$_.TS})
+            }
+        }Catch{}
         Sleep -Milliseconds 25
     }
 })
@@ -77,20 +90,20 @@ $SorterJob=$SorterPosh.BeginInvoke()
 $GraphicsHandlerPosh = [Powershell]::Create()
 $GraphicsHandlerPosh.RunspacePool = $GraphicsHandlerRunspace
 [Void]$GraphicsHandlerPosh.AddScript({
-    param($J,$T)
+    param($F,$J,$T)
 
-    $J = $J.Value
     While(!$T.Disposed){
         If($T.DeltaIn){
-            $J.Clear()
+            $F.Value.Refresh()
             ForEach($Line in $T.Lines){
-                $J.DrawLines($Line.Pen, $Line.Pts)
+                $J.Value.DrawLines($Line.Pen, $Line.Pts)
             }
             $T.DeltaIn = $false
         }
         Sleep -Milliseconds 10
     }
 })
+[Void]$GraphicsHandlerPosh.AddParameter('F',[ref]$Form)
 [Void]$GraphicsHandlerPosh.AddParameter('J',[ref]$Jraphics)
 [Void]$GraphicsHandlerPosh.AddParameter('T',$HashTable)
 $GraphicsHandlerJob=$GraphicsHandlerPosh.BeginInvoke()
@@ -171,12 +184,13 @@ $CommsPosh.RunspacePool = $Runspace
         $Buff = [Byte[]]::new(1024)
         $Streams = @()
         While(!$T.Disposed){
-            If($Srv.Pending()){
-                $Streams+=$Srv.AcceptTcpClientAsync().Result.GetStream()
-            }
+            If($Srv.Pending()){$Streams+=$Srv.AcceptTcpClientAsync().Result.GetStream()}
 
             $OutObj = "A"+[String]::Join("L", $T.FlattenedLines)+"Z"
+            If($T.Clear){$OutObj = "AEMPTYZ";$T.Clear = $false}
             $OutObj = [System.Text.Encoding]::UTF8.GetBytes($OutObj)
+
+            $Clear = $false
             ForEach($Stream in $Streams){
                 If($T.DeltaOut){$Stream.Write($OutObj, 0, $OutObj.Length)}
                 
@@ -189,7 +203,7 @@ $CommsPosh.RunspacePool = $Runspace
                     Try{
                         If($InObj -match "A" -and $InObj -match "Z"){
                             ForEach($Line in ($InObj -replace "^.*?A" -replace "Z.*").Split("L")){
-                                If(!$T.FlattenedLines.Contains($Line)){
+                                If(!$T.FlattenedLines.Contains($Line) -and $Line -ne "EMPTY"){
                                     $T.FlattenedLines+=$Line
 
                                     $T.Lines+=@{
@@ -208,6 +222,8 @@ $CommsPosh.RunspacePool = $Runspace
                                         )
                                     }
                                     $T.DeltaIn = $true
+                                }ElseIf($Line -eq "EMPTY"){
+                                    $Clear = $true
                                 }
                             }
                         }
@@ -217,7 +233,14 @@ $CommsPosh.RunspacePool = $Runspace
                     }
                 }
             }
-            $T.DeltaOut = $false
+            If($Clear){
+                $T.Lines = @()
+                $T.FlattenedLines = [String[]]@()
+                $T.DeltaIn = $true
+                $T.Clear = $true
+            }Else{
+                $T.DeltaOut = $false
+            }
 
             Sleep -Milliseconds 250
         }
@@ -231,12 +254,10 @@ $CommsPosh.RunspacePool = $Runspace
 
         $Buff = [Byte[]]::new(1024)
         While(!$T.Disposed -and $Client.Connected){
-            If($T.DeltaOut){
-                $OutObj = "A"+[String]::Join("L", $T.FlattenedLines)+"Z"
-                $OutObj = [System.Text.Encoding]::UTF8.GetBytes($OutObj)
-                $Stream.Write($OutObj, 0, $OutObj.Length)
-                $T.DeltaOut = $false
-            }
+            $OutObj = "A"+[String]::Join("L", $T.FlattenedLines)+"Z"
+            If($T.Clear){$OutObj = "AEMPTYZ";$T.Clear = $false}
+            $OutObj = [System.Text.Encoding]::UTF8.GetBytes($OutObj)
+            If($T.DeltaOut){$Stream.Write($OutObj, 0, $OutObj.Length);$T.DeltaOut = $false}
 
             If($Stream.DataAvailable){
                 $InObj = ""
@@ -247,7 +268,7 @@ $CommsPosh.RunspacePool = $Runspace
                 Try{
                     If($InObj -match "A" -and $InObj -match "Z"){
                         ForEach($Line in ($InObj -replace "^.*?A" -replace "Z.*").Split("L")){
-                            If(!$T.FlattenedLines.Contains($Line)){
+                            If(!$T.FlattenedLines.Contains($Line) -and $Line -ne "EMPTY"){
                                 $T.FlattenedLines+=$Line
 
                                 $T.Lines+=@{
@@ -266,11 +287,16 @@ $CommsPosh.RunspacePool = $Runspace
                                     )
                                 }
                                 $T.DeltaIn = $true
+                            }ElseIf($Line -eq "EMPTY"){
+                                $T.Lines = @()
+                                $T.FlattenedLines = [String[]]@()
+                                $T.DeltaIn = $true
+                                $T.Clear = $true
                             }
                         }
                     }
                 }Catch{
-                    $InObj | Out-File C:\Temp\Badcli.txt
+                    $InObj | Out-File C:\Temp\Badsrv.txt
                     $Error[0] | Out-String | Out-file -Append C:\Temp\asyncErr.txt
                 }
             }
