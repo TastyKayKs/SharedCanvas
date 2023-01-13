@@ -12,7 +12,7 @@ $HashTable.FlattenedLines = [String[]]@()
 $HashTable.Disposed = $false
 $HashTable.DeltaIn = $false
 $HashTable.DeltaOut = $false
-$HashTable.OffsetX = 5
+$HashTable.OffsetX = 3
 $HashTable.OffsetY = 26
 
 $CPUs = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
