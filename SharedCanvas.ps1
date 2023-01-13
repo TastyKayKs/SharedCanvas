@@ -4,7 +4,7 @@ $lol = $false
 
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
-[System.Windows.Forms.Application]::EnableVisualStyles()
+[System.Windows.Forms.Application]::VisualStyleState = [System.Windows.Forms.VisualStyles.VisualStyleState]::NoneEnabled
 
 $HashTable = [HashTable]::Synchronized(@{})
 $HashTable.Lines = @()
