@@ -75,7 +75,7 @@ $Color.ForeColor = [System.Drawing.Color]::White
 $Color.Add_Click({
     $ColorDialog = [System.Windows.Forms.ColorDialog]::new()
     $ColorDialog.ShowDialog()
-    $C = $ColorDialog.Color
+    Try{$C = $ColorDialog.Color}Catch{}
     
     $This.BackColor = $C
     
