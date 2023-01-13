@@ -12,7 +12,7 @@ $HashTable.FlattenedLines = [String[]]@()
 $HashTable.Disposed = $false
 $HashTable.DeltaIn = $false
 $HashTable.DeltaOut = $false
-$HashTable.OffsetX = 4
+$HashTable.OffsetX = 5
 $HashTable.OffsetY = 26
 
 $CPUs = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
@@ -93,7 +93,7 @@ $Color.Add_Click({
 $Color.Parent = $Form
 
 $Size = [System.Windows.Forms.NumericUpDown]::new()
-$Size.Width = 58
+$Size.Width = 70
 $Size.Top = 2
 $Size.Left = 675
 $Size.Maximum = 100
