@@ -6,17 +6,22 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
 [System.Windows.Forms.Application]::VisualStyleState = [System.Windows.Forms.VisualStyles.VisualStyleState]::NoneEnabled
 
-$HashTable = [HashTable]::Synchronized(@{})
-$HashTable.Lines = @()
-$HashTable.FlattenedLines = [String[]]@()
-$HashTable.Disposed = $false
-$HashTable.DeltaIn = $false
-$HashTable.DeltaOut = $false
-$HashTable.OffsetX = 3
-$HashTable.OffsetY = 26
+$Script:HashTable = [HashTable]::Synchronized(@{})
+$Script:HashTable.Lines = @()
+$Script:HashTable.FlattenedLines = [String[]]@()
+$Script:HashTable.Disposed = $false
+$Script:HashTable.DeltaIn = $false
+$Script:HashTable.DeltaOut = $false
+$Script:HashTable.Clear = $false
+
+$Script:LastPos = [System.Drawing.Point]::new(0,0)
+$Script:CurrPos = [System.Drawing.Point]::new(0,0)
+$Script:Points = [System.Drawing.Point[]]@()
+$Script:Pen = [System.Drawing.Pen]::new([System.Drawing.Color]::Black)
+$Script:Drawing = $false
 
 $CPUs = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
-If($CPUs -lt 4){$CPUs = 4} #Lol, trash computers
+If($CPUs -lt 2){$CPUs = 2} #Lol, trash computers
 $Runspace = [RunspaceFactory]::CreateRunspacePool(1,$CPUs)
 $Runspace.Open()
 
@@ -27,7 +32,6 @@ $Form.FormBorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
 $Form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
 $Form.Height = $Form.Width = 750
 $Form.Left = $Form.Top = 0
-
 If($lol){
     $Form.FormBorderStyle = [System.Windows.Forms.BorderStyle]::None
     $Form.TransparencyKey = $Form.BackColor
@@ -39,11 +43,44 @@ If($lol){
     $Form.TopMost = $false
     $Form.TopMost = $true
     $Form.Hide()
-
-    $HashTable.OffsetX = 0
-    $HashTable.OffsetY = 0
 }
+$Form.Add_MouseDown({
+    If($_.Button -eq [System.Windows.Forms.MouseButtons]::Left){
+        $Script:Drawing = $true
+        $Script:LastPos = $Form.PointToClient([System.Windows.Forms.Cursor]::Position)
 
+        $Script:Pen.Color = $Color.BackColor
+        $Script:Pen.Width = $Size.Value
+
+        $Script:Points = [System.Drawing.Point[]]@()
+    }
+})
+$Form.Add_MouseMove({
+    If($Script:Drawing){
+        Sleep -Milliseconds 10
+        
+        $Script:CurrPos = $Form.PointToClient([System.Windows.Forms.Cursor]::Position)
+        If($Script:CurrPos.X -ne $Script:LastPos.X -or $Script:CurrPos.Y -ne $Script:LastPos.Y){
+            $Jraphics.DrawLine($Script:Pen, $Script:LastPos.X, $Script:LastPos.Y, $Script:CurrPos.X, $Script:CurrPos.Y)
+            $Script:Points+=($Script:LastPos)
+            $Script:Points+=($Script:CurrPos)
+        }
+        
+        $Script:LastPos = $Form.PointToClient([System.Windows.Forms.Cursor]::Position)
+    }
+})
+$Form.Add_MouseUp({
+    If($_.Button -eq [System.Windows.Forms.MouseButtons]::Left){
+        $Script:Drawing = $false
+        If($Script:Points.Count -gt 2){
+            $TS = [datetime]::Now.ToFileTimeUtc()
+            $Script:HashTable.Lines+=@{TS=$TS;Pen=$Script:Pen.Clone();Pts=$Script:Points}
+            $Script:HashTable.FlattenedLines+=[String]($TS.ToString()+"T"+$Script:Pen.Color.ToArgb().ToString()+"C"+$Script:Pen.Width.ToString()+"W"+[String]::Join("Y",$(ForEach($Pt in $Script:Points){$Pt.X.ToString()+"X"+$Pt.Y.ToString()})))
+            $Script:HashTable.FlattenedLines = [String[]]$Script:HashTable.FlattenedLines
+            $Script:HashTable.DeltaOut = $true
+        }
+    }
+})
 $Jraphics = $Form.CreateGraphics()
 
 $Quit = [System.windows.Forms.Button]::new()
@@ -57,10 +94,10 @@ $Clear.Text = "Clear"
 $Clear.Left = 75
 $Clear.Width = 75
 $Clear.Add_Click({
-    $HashTable.Lines = @()
-    $HashTable.FlattenedLines = [String[]]@()
-    $HashTable.Clear = $true
-    $HashTable.DeltaOut = $true
+    $Script:HashTable.Lines = @()
+    $Script:HashTable.FlattenedLines = [String[]]@()
+    $Script:HashTable.Clear = $true
+    $Script:HashTable.DeltaOut = $true
 
     $Form.Refresh()
 })
@@ -93,37 +130,26 @@ $Color.Add_Click({
 $Color.Parent = $Form
 
 $Size = [System.Windows.Forms.NumericUpDown]::new()
-$Size.Width = 70
+$Size.Width = 60
 $Size.Top = 2
 $Size.Left = 675
 $Size.Maximum = 100
 $Size.Minimum = 1
 $Size.Parent = $Form
 
-$SorterPosh = [Powershell]::Create()
-$SorterPosh.RunspacePool = $Runspace
-[Void]$SorterPosh.AddScript({
-    param($T)
+$SortAndDrawInPosh = [Powershell]::Create()
+$SortAndDrawInPosh.RunspacePool = $Runspace
+[Void]$SortAndDrawInPosh.AddScript({
+    param($F,$J,$T)
     While(!$T.Disposed){
         Try{
-            $Sort = [String[]]($T.FlattenedLines | Sort {[int64]$_.Split(",")[0]})
+            $Sort = [String[]]@($T.FlattenedLines | Sort {[int64]$_.Split(",")[0]})
             If($Sort.Count -eq $T.Lines.Count -and ![System.Linq.Enumerable]::SequenceEqual($T.FlattenedLines, $Sort)){
                 $T.FlattenedLines = $Sort
                 $T.Lines = ($T.Lines | Sort {$_.TS})
             }
         }Catch{}
-        Sleep -Milliseconds 25
-    }
-})
-[Void]$SorterPosh.AddParameter('T',$HashTable)
-$SorterJob=$SorterPosh.BeginInvoke()
-
-$GraphicsHandlerPosh = [Powershell]::Create()
-$GraphicsHandlerPosh.RunspacePool = $GraphicsHandlerRunspace
-[Void]$GraphicsHandlerPosh.AddScript({
-    param($F,$J,$T)
-
-    While(!$T.Disposed){
+        
         If($T.DeltaIn){
             $F.Value.Refresh()
             ForEach($Line in $T.Lines){
@@ -134,74 +160,10 @@ $GraphicsHandlerPosh.RunspacePool = $GraphicsHandlerRunspace
         Sleep -Milliseconds 10
     }
 })
-[Void]$GraphicsHandlerPosh.AddParameter('F',[ref]$Form)
-[Void]$GraphicsHandlerPosh.AddParameter('J',[ref]$Jraphics)
-[Void]$GraphicsHandlerPosh.AddParameter('T',$HashTable)
-$GraphicsHandlerJob=$GraphicsHandlerPosh.BeginInvoke()
-
-$FreeDrawPosh = [Powershell]::Create()
-$FreeDrawPosh.RunspacePool = $Runspace
-[Void]$FreeDrawPosh.AddScript({
-    param($F,$J,$T)
-
-    $F = $F.Value
-    $J = $J.Value
-
-    Try{
-        Add-Type -Namespace "User" -Name "Keys" -MemberDefinition '
-            [DllImport("user32.dll")]
-            public static extern short GetKeyState(UInt16 virtualKeyCode);
-        '
-    }Catch{}
-
-    $Pen = [System.Drawing.Pen]::new([System.Drawing.Color]::Black)
-
-    $LastHash = $T
-    While(!$T.Disposed){
-        $LastPos = [System.Windows.Forms.Cursor]::Position
-        $LastPos.X-=$F.Left+$T.OffsetX
-        $LastPos.Y-=$F.Top+$T.OffsetY
-
-        $Pen.Color = $F.Controls[2].BackColor
-        $Pen.Width = $F.Controls[3].Value
-
-        $Points = [System.Drawing.Point[]]@()
-        While([User.Keys]::GetKeyState(0x01) -lt 0){
-            Sleep -Milliseconds 10
-            $CurrPos = [System.Windows.Forms.Cursor]::Position
-            $CurrPos.X-=$F.Left+$T.OffsetX
-            $CurrPos.Y-=$F.Top+$T.OffsetY
-            If(($CurrPos.X -ne $LastPos.X -or $CurrPos.Y -ne $LastPos.Y) -and [User.Keys]::GetKeyState(0x01) -lt 0){
-                $J.DrawLine($Pen, $LastPos.X, $LastPos.Y, $CurrPos.X, $CurrPos.Y)
-                $Points+=($LastPos)
-                $Points+=($CurrPos)
-            }
-            
-            Sleep -Milliseconds 10
-            $LastPos = [System.Windows.Forms.Cursor]::Position
-            $LastPos.X-=$F.Left+$T.OffsetX
-            $LastPos.Y-=$F.Top+$T.OffsetY
-            If(($CurrPos.X -ne $LastPos.X -or $CurrPos.Y -ne $LastPos.Y) -and [User.Keys]::GetKeyState(0x01) -lt 0){
-                $J.DrawLine($Pen, $CurrPos.X, $CurrPos.Y, $LastPos.X, $LastPos.Y)
-                $Points+=($CurrPos)
-                $Points+=($LastPos)
-            }
-        }
-
-        If($Points.Count -gt 2){
-            $TS = [datetime]::Now.ToFileTimeUtc()
-            $T.Lines+=@{TS=$TS;Pen=$Pen.Clone();Pts=$Points}
-            $T.FlattenedLines+=($TS.ToString()+"T"+$Pen.Color.ToArgb().ToString()+"C"+$Pen.Width.ToString()+"W"+[String]::Join("Y",$(ForEach($Pt in $Points){$Pt.X.ToString()+"X"+$Pt.Y.ToString()})))
-            $T.DeltaOut = $true
-        }
-    }
-})
-[Void]$FreeDrawPosh.AddParameter('F',[ref]$Form)
-[Void]$FreeDrawPosh.AddParameter('J',[ref]$Jraphics)
-[Void]$FreeDrawPosh.AddParameter('T',$HashTable)
-$FreeDrawJob=$FreeDrawPosh.BeginInvoke()
-
-# Still need a clear button for the host
+[Void]$SortAndDrawInPosh.AddParameter('F',[ref]$Form)
+[Void]$SortAndDrawInPosh.AddParameter('J',[ref]$Jraphics)
+[Void]$SortAndDrawInPosh.AddParameter('T',$Script:HashTable)
+$SortAndDrawInJob=$SortAndDrawInPosh.BeginInvoke()
 
 $CommsPosh = [Powershell]::Create()
 $CommsPosh.RunspacePool = $Runspace
@@ -210,7 +172,7 @@ $CommsPosh.RunspacePool = $Runspace
 
     If(!$S){
         $Srv = [System.Net.Sockets.TcpListener]::new("0.0.0.0", 42069)
-        $Srv.Start()
+        Try{$Srv.Start()}Catch{[Console]::WriteLine($Error[0])}
 
         $Buff = [Byte[]]::new(1024)
         $Streams = @()
@@ -220,7 +182,7 @@ $CommsPosh.RunspacePool = $Runspace
             $OutObj = "A"+[String]::Join("L", $T.FlattenedLines)+"Z"
             If($T.Clear){$OutObj = "AEMPTYZ";$T.Clear = $false}
             $OutObj = [System.Text.Encoding]::UTF8.GetBytes($OutObj)
-
+            
             $Clear = $false
             ForEach($Stream in $Streams){
                 If($T.DeltaOut){$Stream.Write($OutObj, 0, $OutObj.Length)}
@@ -236,7 +198,7 @@ $CommsPosh.RunspacePool = $Runspace
                             ForEach($Line in ($InObj -replace "^.*?A" -replace "Z.*").Split("L")){
                                 If(!$T.FlattenedLines.Contains($Line) -and $Line -ne "EMPTY"){
                                     $T.FlattenedLines+=$Line
-
+                                    
                                     $T.Lines+=@{
                                         TS=[int64]($Line -replace "T.*");
                                         Pen=[System.Drawing.Pen]::new(
@@ -268,9 +230,14 @@ $CommsPosh.RunspacePool = $Runspace
                 $T.Lines = @()
                 $T.FlattenedLines = [String[]]@()
                 $T.DeltaIn = $true
+                $T.DeltaOut = $true
                 $T.Clear = $true
             }Else{
-                $T.DeltaOut = $false
+                If(!$T.DeltaIn){
+                    $T.DeltaOut = $false
+                }Else{
+                    $T.DeltaOut = $true
+                }
             }
 
             Sleep -Milliseconds 250
@@ -339,17 +306,15 @@ $CommsPosh.RunspacePool = $Runspace
         $Client.Dispose()
     }
 })
-[Void]$CommsPosh.AddParameter('T',$HashTable)
+[Void]$CommsPosh.AddParameter('T',$Script:HashTable)
 [Void]$CommsPosh.AddParameter('S',$Server)
 $CommsJob=$CommsPosh.BeginInvoke()
 
 $Form.ShowDialog()
 $Form.Dispose()
 
-$HashTable.Disposed = $true
+$Script:HashTable.Disposed = $true
 
-[Void]$SorterPosh.EndInvoke($SorterJob)
-[Void]$GraphicsHandlerPosh.EndInvoke($GraphicsHandlerJob)
-[Void]$FreeDrawPosh.EndInvoke($FreeDrawJob)
+[Void]$SortAndDrawInPosh.EndInvoke($SortAndDrawInJob)
 [Void]$CommsPosh.EndInvoke($CommsJob)
 $Runspace.Close()
