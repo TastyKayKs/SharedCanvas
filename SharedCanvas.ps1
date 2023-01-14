@@ -12,13 +12,13 @@ $Script:HashTable.FlattenedLines = [String[]]@()
 $Script:HashTable.Disposed = $false
 $Script:HashTable.DeltaIn = $false
 $Script:HashTable.DeltaOut = $false
+$Script:HashTable.Drawing = $false
 $Script:HashTable.Clear = $false
 
 $Script:LastPos = [System.Drawing.Point]::new(0,0)
 $Script:CurrPos = [System.Drawing.Point]::new(0,0)
 $Script:Points = [System.Drawing.Point[]]@()
 $Script:Pen = [System.Drawing.Pen]::new([System.Drawing.Color]::Black)
-$Script:Drawing = $false
 
 $CPUs = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
 If($CPUs -lt 2){$CPUs = 2} #Lol, trash computers
@@ -46,7 +46,7 @@ If($lol){
 }
 $Form.Add_MouseDown({
     If($_.Button -eq [System.Windows.Forms.MouseButtons]::Left){
-        $Script:Drawing = $true
+        $Script:HashTable.Drawing = $true
         $Script:LastPos = $Form.PointToClient([System.Windows.Forms.Cursor]::Position)
 
         $Script:Pen.Color = $Color.BackColor
@@ -56,7 +56,7 @@ $Form.Add_MouseDown({
     }
 })
 $Form.Add_MouseMove({
-    If($Script:Drawing){
+    If($Script:Hashtable.Drawing){
         Sleep -Milliseconds 10
         
         $Script:CurrPos = $Form.PointToClient([System.Windows.Forms.Cursor]::Position)
@@ -71,7 +71,7 @@ $Form.Add_MouseMove({
 })
 $Form.Add_MouseUp({
     If($_.Button -eq [System.Windows.Forms.MouseButtons]::Left){
-        $Script:Drawing = $false
+        $Script:HashTable.Drawing = $false
         If($Script:Points.Count -gt 2){
             $TS = [datetime]::Now.ToFileTimeUtc()
             $Script:HashTable.Lines+=@{TS=$TS;Pen=$Script:Pen.Clone();Pts=$Script:Points}
@@ -141,6 +141,9 @@ $SortAndDrawInPosh = [Powershell]::Create()
 $SortAndDrawInPosh.RunspacePool = $Runspace
 [Void]$SortAndDrawInPosh.AddScript({
     param($F,$J,$T)
+
+    $Timeout = 0
+
     While(!$T.Disposed){
         Try{
             $Sort = [String[]]@($T.FlattenedLines | Sort {[int64]$_.Split(",")[0]})
@@ -150,7 +153,9 @@ $SortAndDrawInPosh.RunspacePool = $Runspace
             }
         }Catch{}
         
-        If($T.DeltaIn){
+        If($T.DeltaIn -or $Timeout -ge 300 -and !$T.Drawing){
+            $Timeout = 0
+            
             $F.Value.Refresh()
             ForEach($Line in $T.Lines){
                 $J.Value.DrawLines($Line.Pen, $Line.Pts)
@@ -158,6 +163,8 @@ $SortAndDrawInPosh.RunspacePool = $Runspace
             $T.DeltaIn = $false
         }
         Sleep -Milliseconds 10
+
+        $Timeout++
     }
 })
 [Void]$SortAndDrawInPosh.AddParameter('F',[ref]$Form)
