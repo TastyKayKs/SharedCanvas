@@ -1,4 +1,4 @@
-$Server = "127.0.0.1"
+$Server = ""
 
 $lol = $false
 
@@ -162,7 +162,6 @@ $Size.Top = 2
 $Size.Left = 675
 $Size.Maximum = 100
 $Size.Minimum = 1
-$Size.Add_MouseDown({})
 $Size.Parent = $Form
 
 $SortAndDrawInPosh = [Powershell]::Create()
