@@ -1,4 +1,4 @@
-$Server = ""
+$Server = "127.0.0.1"
 
 $lol = $false
 
@@ -14,6 +14,8 @@ $Script:HashTable.DeltaIn = $false
 $Script:HashTable.DeltaOut = $false
 $Script:HashTable.Drawing = $false
 $Script:HashTable.Clear = $false
+$Script:HashTable.Server = $Server
+
 
 $Script:LastPos = [System.Drawing.Point]::new(0,0)
 $Script:CurrPos = [System.Drawing.Point]::new(0,0)
@@ -75,7 +77,7 @@ $Form.Add_MouseUp({
         If($Script:Points.Count -gt 2){
             $TS = [datetime]::Now.ToFileTimeUtc()
             $Script:HashTable.Lines+=@{TS=$TS;Pen=$Script:Pen.Clone();Pts=$Script:Points}
-            $Script:HashTable.FlattenedLines+=[String]($TS.ToString()+"T"+$Script:Pen.Color.ToArgb().ToString()+"C"+$Script:Pen.Width.ToString()+"W"+[String]::Join("Y",$(ForEach($Pt in $Script:Points){$Pt.X.ToString()+"X"+$Pt.Y.ToString()})))
+            $Script:HashTable.FlattenedLines+=[String]($TS.ToString()+"T"+$Form.BackColor.ToArgb().ToString()+"B"+$Script:Pen.Color.ToArgb().ToString()+"C"+$Script:Pen.Width.ToString()+"W"+[String]::Join("Y",$(ForEach($Pt in $Script:Points){$Pt.X.ToString()+"X"+$Pt.Y.ToString()})))
             $Script:HashTable.FlattenedLines = [String[]]$Script:HashTable.FlattenedLines
             $Script:HashTable.DeltaOut = $true
         }
@@ -87,6 +89,7 @@ $Quit = [System.windows.Forms.Button]::new()
 $Quit.Text = "Quit"
 $Quit.Width = 75
 $Quit.Add_Click({$This.Parent.Close()})
+$Quit.BackColor = $Form.BackColor
 $Quit.Parent = $Form
 
 $Clear = [System.windows.Forms.Button]::new()
@@ -101,7 +104,31 @@ $Clear.Add_Click({
 
     $Form.Refresh()
 })
+$Clear.BackColor = $Form.BackColor
 $Clear.Parent = $Form
+
+$BGColor = [System.windows.Forms.Button]::new()
+$BGColor.Text = "BGColor"
+$BGColor.Left = 150
+$BGColor.Width = 75
+$BGColor.Add_Click({
+    $ColorDialog = [System.Windows.Forms.ColorDialog]::new()
+    $ColorDialog.ShowDialog()
+    Try{$C = $ColorDialog.Color}Catch{}
+
+    $This.Parent.BackColor = $C
+    If($Script:HashTable.Lines.Count -and $Script:HashTable.FlattenedLines.Count){
+        $Script:HashTable.Lines[-1].BG = $C
+        $Script:HashTable.FlattenedLines[-1] = $Script:HashTable.FlattenedLines[-1] -replace "T.*?B","T$($C.ToArgb().ToString())B"
+    }
+
+    $Script:HashTable.DeltaIn = $true
+    $Script:HashTable.DeltaOut = $true
+
+    $Form.Refresh()
+})
+$BGColor.BackColor = $Form.BackColor
+$BGColor.Parent = $Form
 
 $Color = [System.windows.Forms.Button]::new()
 $Color.Text = "Color"
@@ -129,12 +156,13 @@ $Color.Add_Click({
 })
 $Color.Parent = $Form
 
-$Size = [System.Windows.Forms.NumericUpDown]::new()
+$Size = [System.Windows.Forms.TrackBar]::new()
 $Size.Width = 60
 $Size.Top = 2
 $Size.Left = 675
 $Size.Maximum = 100
 $Size.Minimum = 1
+$Size.Add_MouseDown({})
 $Size.Parent = $Form
 
 $SortAndDrawInPosh = [Powershell]::Create()
@@ -143,6 +171,7 @@ $SortAndDrawInPosh.RunspacePool = $Runspace
     param($F,$J,$T)
 
     $Timeout = 0
+    $TimedOut = $false
 
     While(!$T.Disposed){
         Try{
@@ -153,10 +182,13 @@ $SortAndDrawInPosh.RunspacePool = $Runspace
             }
         }Catch{}
         
-        If($T.DeltaIn -or $Timeout -ge 300 -and !$T.Drawing){
+        If($T.DeltaIn -or $T.Drawing){$TimedOut = $false}
+        If($T.DeltaIn -or $Timeout -ge 300 -and !$T.Drawing -and !$TimedOut){
             $Timeout = 0
+            $TimedOut = $true
             
             $F.Value.Refresh()
+            Try{$F.Value.BackColor = $T.Lines[-1].BG}Catch{}
             ForEach($Line in $T.Lines){
                 $J.Value.DrawLines($Line.Pen, $Line.Pts)
             }
@@ -175,9 +207,11 @@ $SortAndDrawInJob=$SortAndDrawInPosh.BeginInvoke()
 $CommsPosh = [Powershell]::Create()
 $CommsPosh.RunspacePool = $Runspace
 [Void]$CommsPosh.AddScript({
-    param($T,$S)
+    param($T)
 
-    If(!$S){
+    $S = $T.Server
+
+    If(!$T.Server){
         $Srv = [System.Net.Sockets.TcpListener]::new("0.0.0.0", 42069)
         Try{$Srv.Start()}Catch{[Console]::WriteLine($Error[0])}
 
@@ -208,8 +242,9 @@ $CommsPosh.RunspacePool = $Runspace
                                     
                                     $T.Lines+=@{
                                         TS=[int64]($Line -replace "T.*");
+                                        BG=[System.Drawing.Color]::FromArgb([int]($Line -replace "^.*?T" -replace "B.*"));
                                         Pen=[System.Drawing.Pen]::new(
-                                            [System.Drawing.Color]::FromArgb([int]($Line -replace "^.*?T" -replace "C.*")),
+                                            [System.Drawing.Color]::FromArgb([int]($Line -replace "^.*?B" -replace "C.*")),
                                             [Int]($Line -replace "^.*?C" -replace "W.*")
                                         );
                                         Pts=[System.Drawing.Point[]]$(
@@ -254,7 +289,7 @@ $CommsPosh.RunspacePool = $Runspace
         $Srv.Stop()
 
     }Else{
-        $Client = [System.Net.Sockets.TcpClient]::New($S, 42069)
+        $Client = [System.Net.Sockets.TcpClient]::New($T.Server, 42069)
         $Stream = $Client.GetStream()
 
         $Buff = [Byte[]]::new(1024)
@@ -278,8 +313,9 @@ $CommsPosh.RunspacePool = $Runspace
 
                                 $T.Lines+=@{
                                     TS=[int64]($Line -replace "T.*");
+                                    BG=[System.Drawing.Color]::FromArgb([int]($Line -replace "^.*?T" -replace "B.*"));
                                     Pen=[System.Drawing.Pen]::new(
-                                        [System.Drawing.Color]::FromArgb([int]($Line -replace "^.*?T" -replace "C.*")),
+                                        [System.Drawing.Color]::FromArgb([int]($Line -replace "^.*?B" -replace "C.*")),
                                         [Int]($Line -replace "^.*?C" -replace "W.*")
                                     );
                                     Pts=[System.Drawing.Point[]]$(
@@ -296,7 +332,6 @@ $CommsPosh.RunspacePool = $Runspace
                                 $T.Lines = @()
                                 $T.FlattenedLines = [String[]]@()
                                 $T.DeltaIn = $true
-                                $T.Clear = $true
                             }
                         }
                     }
@@ -314,7 +349,6 @@ $CommsPosh.RunspacePool = $Runspace
     }
 })
 [Void]$CommsPosh.AddParameter('T',$Script:HashTable)
-[Void]$CommsPosh.AddParameter('S',$Server)
 $CommsJob=$CommsPosh.BeginInvoke()
 
 $Form.ShowDialog()
