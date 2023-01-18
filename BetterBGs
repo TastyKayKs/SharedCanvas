@@ -78,11 +78,8 @@ $Form.Add_MouseUp({
         $Script:HashTable.Drawing = $false
         If($Script:Points.Count -gt 2){
             $TS = [datetime]::Now.ToFileTimeUtc()
-            [Console]::WriteLine("PEN1")
             $Script:HashTable.Lines.Add(@{TS=$TS;Pen=$Script:Pen.Clone();Pts=$Script:Points})
-            [Console]::WriteLine("PEN2")
             $Script:HashTable.FlattenedLines.Add([String]($TS.ToString()+"T"+$Script:Pen.Color.ToArgb().ToString()+"C"+$Script:Pen.Width.ToString()+"W"+[String]::Join("Y",$(ForEach($Pt in $Script:Points){$Pt.X.ToString()+"X"+$Pt.Y.ToString()}))))
-            [Console]::WriteLine("PEN3")
             $Script:HashTable.DeltaOut = $true
         }
     }
@@ -179,11 +176,9 @@ $SortAndDrawInPosh.RunspacePool = $Runspace
         Try{
             $Sort = @($T.FlattenedLines | Sort {[int64]$_.Split("T")[0]})
             If($T.DeltaIn -or ![System.Linq.Enumerable]::SequenceEqual($T.FlattenedLines, $Sort)){
-                [Console]::WriteLine("TESt")
                 $T.FlattenedLines = [System.Collections.ArrayList]::new($Sort)
                 $T.Lines = [System.Collections.ArrayList]::new(($T.Lines | Sort {$_.TS}))
                 $T.DeltaIn = $true
-                Try{$F.Value.BackColor = $T.BG}Catch{}
             }
         }Catch{}
         
@@ -193,11 +188,13 @@ $SortAndDrawInPosh.RunspacePool = $Runspace
             $TimedOut = $true
             
             $F.Value.Refresh()
-            #Try{$F.Value.BackColor = $T.Lines[-1].BG}Catch{}
+            Try{
+                If($F.Value.BackColor -ne $T.BG){
+                    $F.Value.BackColor = $T.BG
+                }
+            }Catch{}
             ForEach($Line in $T.Lines){
-                #[Console]::writeLine(($Line | Out-String))
                 $J.Value.DrawLines($Line.Pen, $Line.Pts)
-                #[Console]::WriteLine($Error[0])
             }
             $T.DeltaIn = $false
         }
@@ -253,7 +250,7 @@ $CommsPosh.RunspacePool = $Runspace
                 Try{
                     If($InObj -match "A" -and $InObj -match "Z"){
                         ForEach($Line in ($InObj -replace "^.*?A" -replace "Z.*").Split("L")){
-                            If(!$T.FlattenedLines.Contains($Line) -and $Line -ne "EMPTY"){
+                            If(!$T.FlattenedLines.Contains($Line) -and $Line -ne "EMPTY" -and $Line -notmatch "^BACK"){
                                 $T.FlattenedLines.Add($Line)
                                 
                                 $T.Lines.Add(@{
@@ -275,7 +272,7 @@ $CommsPosh.RunspacePool = $Runspace
                                 $T.DeltaIn = $true
                             }ElseIf($Line -eq "EMPTY"){
                                 $Clear = $true
-                            }ElseIf($Line.Substring(0,4) -eq "BACK"){
+                            }ElseIf($Line -match "^BACK"){
                                 $Back = $true
                                 $BG = [System.Drawing.Color]::FromArgb([int]$Line.Replace("BACK",""))
                             }
@@ -298,7 +295,7 @@ $CommsPosh.RunspacePool = $Runspace
 
             $T.DeltaIn = $true
             If(!$T.Server){$T.DeltaOut = $true}
-        }If($Back){
+        }ElseIf($Back){
             $T.BG = $BG
             $T.Back = $true
 
@@ -318,7 +315,7 @@ $CommsPosh.RunspacePool = $Runspace
 $CommsJob=$CommsPosh.BeginInvoke()
 
 $Script:HashTable.BlankLine = @{TS=0;Pen=$Script:Pen.Clone();Pts=[System.Drawing.Point[]]@([System.Drawing.Point]::new(0,0),[System.Drawing.Point]::new(0,0))}
-$Script:HashTable.FlatBlankLine = [String]("0T"+$Script:Pen.Color.ToArgb().ToString()+"C1W0X0Y0X0")
+$Script:HashTable.FlatBlankLine = [String]("0T-16777216C1W0X0Y0X0")
 
 [Void]$Script:HashTable.Lines.Add($Script:HashTable.BlankLine)
 [Void]$Script:HashTable.FlattenedLines.Add($Script:HashTable.FlatBlankLine)
