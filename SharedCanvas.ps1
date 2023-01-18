@@ -7,15 +7,17 @@ Add-Type -AssemblyName System.Windows.Forms
 [System.Windows.Forms.Application]::VisualStyleState = [System.Windows.Forms.VisualStyles.VisualStyleState]::NoneEnabled
 
 $Script:HashTable = [HashTable]::Synchronized(@{})
-$Script:HashTable.Lines = @()
-$Script:HashTable.FlattenedLines = [String[]]@()
+$Script:HashTable.Lines = [System.Collections.ArrayList]::new()
+$Script:HashTable.FlattenedLines = [System.Collections.ArrayList]::new()
 $Script:HashTable.Disposed = $false
 $Script:HashTable.DeltaIn = $false
 $Script:HashTable.DeltaOut = $false
 $Script:HashTable.Drawing = $false
 $Script:HashTable.Clear = $false
 $Script:HashTable.Server = $Server
-
+#Set just before launch
+$Script:HashTable.BlankLine = $null
+$Script:HashTable.FlatBlankLine = $null
 
 $Script:LastPos = [System.Drawing.Point]::new(0,0)
 $Script:CurrPos = [System.Drawing.Point]::new(0,0)
@@ -76,9 +78,8 @@ $Form.Add_MouseUp({
         $Script:HashTable.Drawing = $false
         If($Script:Points.Count -gt 2){
             $TS = [datetime]::Now.ToFileTimeUtc()
-            $Script:HashTable.Lines+=@{TS=$TS;Pen=$Script:Pen.Clone();Pts=$Script:Points}
-            $Script:HashTable.FlattenedLines+=[String]($TS.ToString()+"T"+$Form.BackColor.ToArgb().ToString()+"B"+$Script:Pen.Color.ToArgb().ToString()+"C"+$Script:Pen.Width.ToString()+"W"+[String]::Join("Y",$(ForEach($Pt in $Script:Points){$Pt.X.ToString()+"X"+$Pt.Y.ToString()})))
-            $Script:HashTable.FlattenedLines = [String[]]$Script:HashTable.FlattenedLines
+            $Script:HashTable.Lines.Add(@{TS=$TS;Pen=$Script:Pen.Clone();Pts=$Script:Points})
+            $Script:HashTable.FlattenedLines.Add([String]($TS.ToString()+"T"+$Script:Pen.Color.ToArgb().ToString()+"C"+$Script:Pen.Width.ToString()+"W"+[String]::Join("Y",$(ForEach($Pt in $Script:Points){$Pt.X.ToString()+"X"+$Pt.Y.ToString()}))))
             $Script:HashTable.DeltaOut = $true
         }
     }
@@ -97,8 +98,10 @@ $Clear.Text = "Clear"
 $Clear.Left = 75
 $Clear.Width = 75
 $Clear.Add_Click({
-    $Script:HashTable.Lines = @()
-    $Script:HashTable.FlattenedLines = [String[]]@()
+    $Script:HashTable.Lines = [System.Collections.ArrayList]::new()
+    $Script:HashTable.FlattenedLines = [System.Collections.ArrayList]::new()
+    $Script:HashTable.Lines.Add($Script:HashTable.BlankLine)
+    $Script:HashTable.FlattenedLines.Add($Script:HashTable.FlatBlankLine)
     $Script:HashTable.Clear = $true
     $Script:HashTable.DeltaOut = $true
 
@@ -117,11 +120,8 @@ $BGColor.Add_Click({
     Try{$C = $ColorDialog.Color}Catch{}
 
     $This.Parent.BackColor = $C
-    If($Script:HashTable.Lines.Count -and $Script:HashTable.FlattenedLines.Count){
-        $Script:HashTable.Lines[-1].BG = $C
-        $Script:HashTable.FlattenedLines[-1] = $Script:HashTable.FlattenedLines[-1] -replace "T.*?B","T$($C.ToArgb().ToString())B"
-    }
-
+    $Script:HashTable.BG = $C
+    $Script:HashTable.Back = $true
     $Script:HashTable.DeltaIn = $true
     $Script:HashTable.DeltaOut = $true
 
@@ -174,10 +174,11 @@ $SortAndDrawInPosh.RunspacePool = $Runspace
 
     While(!$T.Disposed){
         Try{
-            $Sort = [String[]]@($T.FlattenedLines | Sort {[int64]$_.Split(",")[0]})
-            If($Sort.Count -eq $T.Lines.Count -and ![System.Linq.Enumerable]::SequenceEqual($T.FlattenedLines, $Sort)){
-                $T.FlattenedLines = $Sort
-                $T.Lines = ($T.Lines | Sort {$_.TS})
+            $Sort = @($T.FlattenedLines | Sort {[int64]$_.Split("T")[0]})
+            If($T.DeltaIn -or ![System.Linq.Enumerable]::SequenceEqual($T.FlattenedLines, $Sort)){
+                $T.FlattenedLines = [System.Collections.ArrayList]::new($Sort)
+                $T.Lines = [System.Collections.ArrayList]::new(($T.Lines | Sort {$_.TS}))
+                $T.DeltaIn = $true
             }
         }Catch{}
         
@@ -187,7 +188,11 @@ $SortAndDrawInPosh.RunspacePool = $Runspace
             $TimedOut = $true
             
             $F.Value.Refresh()
-            Try{$F.Value.BackColor = $T.Lines[-1].BG}Catch{}
+            Try{
+                If($F.Value.BackColor -ne $T.BG){
+                    $F.Value.BackColor = $T.BG
+                }
+            }Catch{}
             ForEach($Line in $T.Lines){
                 $J.Value.DrawLines($Line.Pen, $Line.Pts)
             }
@@ -208,96 +213,34 @@ $CommsPosh.RunspacePool = $Runspace
 [Void]$CommsPosh.AddScript({
     param($T)
 
-    $S = $T.Server
-
+    $Streams = @()
     If(!$T.Server){
         $Srv = [System.Net.Sockets.TcpListener]::new("0.0.0.0", 42069)
         Try{$Srv.Start()}Catch{[Console]::WriteLine($Error[0])}
-
-        $Buff = [Byte[]]::new(1024)
-        $Streams = @()
-        While(!$T.Disposed){
-            If($Srv.Pending()){$Streams+=$Srv.AcceptTcpClientAsync().Result.GetStream()}
-
-            $OutObj = "A"+[String]::Join("L", $T.FlattenedLines)+"Z"
-            If($T.Clear){$OutObj = "AEMPTYZ";$T.Clear = $false}
-            $OutObj = [System.Text.Encoding]::UTF8.GetBytes($OutObj)
-            
-            $Clear = $false
-            ForEach($Stream in $Streams){
-                If($T.DeltaOut){$Stream.Write($OutObj, 0, $OutObj.Length)}
-                
-                If($Stream.DataAvailable){
-                    $InObj = ""
-                    While($Stream.DataAvailable){
-                        $InCount = $Stream.Read($Buff, 0, 1024)
-                        $InObj+=[System.Text.Encoding]::UTF8.GetString($Buff[0..($InCount-1)])
-                    }
-                    Try{
-                        If($InObj -match "A" -and $InObj -match "Z"){
-                            ForEach($Line in ($InObj -replace "^.*?A" -replace "Z.*").Split("L")){
-                                If(!$T.FlattenedLines.Contains($Line) -and $Line -ne "EMPTY"){
-                                    $T.FlattenedLines+=$Line
-                                    
-                                    $T.Lines+=@{
-                                        TS=[int64]($Line -replace "T.*");
-                                        BG=[System.Drawing.Color]::FromArgb([int]($Line -replace "^.*?T" -replace "B.*"));
-                                        Pen=[System.Drawing.Pen]::new(
-                                            [System.Drawing.Color]::FromArgb([int]($Line -replace "^.*?B" -replace "C.*")),
-                                            [Int]($Line -replace "^.*?C" -replace "W.*")
-                                        );
-                                        Pts=[System.Drawing.Point[]]$(
-                                            ForEach($Coords in ($Line -replace "^.*?W").Split("Y")){
-                                                [System.Drawing.Point]::new(
-                                                    [int]($Coords -replace "X.*"),
-                                                    [int]($Coords -replace "^.*?X")
-                                                )
-                                            }
-                                        )
-                                    }
-                                    $T.DeltaIn = $true
-                                }ElseIf($Line -eq "EMPTY"){
-                                    $Clear = $true
-                                }
-                            }
-                        }
-                    }Catch{
-                        $InObj | Out-File C:\Temp\Badsrv.txt
-                        $Error[0] | Out-String | Out-file -Append C:\Temp\asyncErr.txt
-                    }
-                }
-            }
-            If($Clear){
-                $T.Lines = @()
-                $T.FlattenedLines = [String[]]@()
-                $T.DeltaIn = $true
-                $T.DeltaOut = $true
-                $T.Clear = $true
-            }Else{
-                If(!$T.DeltaIn){
-                    $T.DeltaOut = $false
-                }Else{
-                    $T.DeltaOut = $true
-                }
-            }
-
-            Sleep -Milliseconds 250
-        }
-
-        ForEach($Stream in $Streams){$Stream.Close;$Stream.Dispose()}
-        $Srv.Stop()
-
     }Else{
-        $Client = [System.Net.Sockets.TcpClient]::New($T.Server, 42069)
-        $Stream = $Client.GetStream()
+        Try{
+            $Client = [System.Net.Sockets.TcpClient]::New($T.Server, 42069)
+            $Stream = $Client.GetStream()
+            $Streams+=$Stream
+        }Catch{}
+    }
 
-        $Buff = [Byte[]]::new(1024)
-        While(!$T.Disposed -and $Client.Connected){
-            $OutObj = "A"+[String]::Join("L", $T.FlattenedLines)+"Z"
-            If($T.Clear){$OutObj = "AEMPTYZ";$T.Clear = $false}
-            $OutObj = [System.Text.Encoding]::UTF8.GetBytes($OutObj)
-            If($T.DeltaOut){$Stream.Write($OutObj, 0, $OutObj.Length);$T.DeltaOut = $false}
+    $Buff = [Byte[]]::new(1024)
+    While(!$T.Disposed){
+        If(!$T.Server -and $Srv.Pending()){$Streams+=$Srv.AcceptTcpClientAsync().Result.GetStream()}
 
+        $OutObj = "A"+[String]::Join("L", $T.FlattenedLines.ToArray())+"Z"
+        If($T.Clear){$OutObj = "AEMPTYZ";$T.Clear = $false}
+        If($T.Back){$OutObj = "ABACK$($T.BG.ToArgb().ToString())Z";$T.Back = $false}
+        $OutObj = [System.Text.Encoding]::UTF8.GetBytes($OutObj)
+
+        $BG = [System.Drawing.Color]::Black
+
+        $Clear = $false
+        $Back = $false
+        ForEach($Stream in $Streams){
+            If($T.DeltaOut){$Stream.Write($OutObj, 0, $OutObj.Length)}
+                
             If($Stream.DataAvailable){
                 $InObj = ""
                 While($Stream.DataAvailable){
@@ -307,14 +250,13 @@ $CommsPosh.RunspacePool = $Runspace
                 Try{
                     If($InObj -match "A" -and $InObj -match "Z"){
                         ForEach($Line in ($InObj -replace "^.*?A" -replace "Z.*").Split("L")){
-                            If(!$T.FlattenedLines.Contains($Line) -and $Line -ne "EMPTY"){
-                                $T.FlattenedLines+=$Line
-
-                                $T.Lines+=@{
+                            If(!$T.FlattenedLines.Contains($Line) -and $Line -ne "EMPTY" -and $Line -notmatch "^BACK"){
+                                $T.FlattenedLines.Add($Line)
+                                
+                                $T.Lines.Add(@{
                                     TS=[int64]($Line -replace "T.*");
-                                    BG=[System.Drawing.Color]::FromArgb([int]($Line -replace "^.*?T" -replace "B.*"));
                                     Pen=[System.Drawing.Pen]::new(
-                                        [System.Drawing.Color]::FromArgb([int]($Line -replace "^.*?B" -replace "C.*")),
+                                        [System.Drawing.Color]::FromArgb([int]($Line -replace "^.*?T" -replace "C.*")),
                                         [Int]($Line -replace "^.*?C" -replace "W.*")
                                     );
                                     Pts=[System.Drawing.Point[]]$(
@@ -325,30 +267,58 @@ $CommsPosh.RunspacePool = $Runspace
                                             )
                                         }
                                     )
-                                }
+                                })
+
                                 $T.DeltaIn = $true
                             }ElseIf($Line -eq "EMPTY"){
-                                $T.Lines = @()
-                                $T.FlattenedLines = [String[]]@()
-                                $T.DeltaIn = $true
+                                $Clear = $true
+                            }ElseIf($Line -match "^BACK"){
+                                $Back = $true
+                                $BG = [System.Drawing.Color]::FromArgb([int]$Line.Replace("BACK",""))
                             }
                         }
                     }
                 }Catch{
-                    $InObj | Out-File C:\Temp\Badsrv.txt
+                    $InObj | Out-File C:\Temp\BadLineIn.txt
                     $Error[0] | Out-String | Out-file -Append C:\Temp\asyncErr.txt
                 }
             }
+        }
+        $T.DeltaOut = $false
 
-            Sleep -Milliseconds 250
+        If($Clear){
+            $T.Lines = [System.Collections.ArrayList]::new()
+            $T.FlattenedLines = [System.Collections.ArrayList]::new()
+            $T.Lines.Add($T.BlankLine)
+            $T.FlattenedLines.Add($T.FlatBlankLine)
+            $T.Clear = $true
+
+            $T.DeltaIn = $true
+            If(!$T.Server){$T.DeltaOut = $true}
+        }ElseIf($Back){
+            $T.BG = $BG
+            $T.Back = $true
+
+            $T.DeltaIn = $true
+            If(!$T.Server){$T.DeltaOut = $true}
+        }ElseIf(!$T.Server){
+            $T.DeltaOut = $T.DeltaIn
         }
 
-        $Client.Close()
-        $Client.Dispose()
+        Sleep -Milliseconds 250
     }
+
+    ForEach($Stream in $Streams){$Stream.Close;$Stream.Dispose()}
+    $Srv.Stop()
 })
 [Void]$CommsPosh.AddParameter('T',$Script:HashTable)
 $CommsJob=$CommsPosh.BeginInvoke()
+
+$Script:HashTable.BlankLine = @{TS=0;Pen=$Script:Pen.Clone();Pts=[System.Drawing.Point[]]@([System.Drawing.Point]::new(0,0),[System.Drawing.Point]::new(0,0))}
+$Script:HashTable.FlatBlankLine = [String]("0T-16777216C1W0X0Y0X0")
+
+[Void]$Script:HashTable.Lines.Add($Script:HashTable.BlankLine)
+[Void]$Script:HashTable.FlattenedLines.Add($Script:HashTable.FlatBlankLine)
 
 $Form.ShowDialog()
 $Form.Dispose()
