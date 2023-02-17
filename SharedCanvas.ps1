@@ -1,4 +1,4 @@
-$Server = ""
+$Remote = ""
 
 $lol = $false
 
@@ -14,7 +14,7 @@ $Script:HashTable.DeltaIn = $false
 $Script:HashTable.DeltaOut = $false
 $Script:HashTable.Drawing = $false
 $Script:HashTable.Clear = $false
-$Script:HashTable.Server = $Server
+$Script:HashTable.Remote = $Remote
 #Set just before launch
 $Script:HashTable.BlankLine = $null
 $Script:HashTable.FlatBlankLine = $null
@@ -182,7 +182,7 @@ $SortAndDrawInPosh.RunspacePool = $Runspace
     While(!$T.Disposed){
         Try{
             $Sort = @($T.FlattenedLines | Sort {[int64]$_.Split("T")[0]})
-            If($T.DeltaIn -or ![System.Linq.Enumerable]::SequenceEqual($T.FlattenedLines, $Sort)){
+            If(!$T.Clear -and ($T.DeltaIn -or ![System.Linq.Enumerable]::SequenceEqual($T.FlattenedLines, $Sort))){
                 $T.FlattenedLines = [System.Collections.ArrayList]::new($Sort)
                 $T.Lines = [System.Collections.ArrayList]::new(($T.Lines | Sort {$_.TS}))
                 $T.DeltaIn = $true
@@ -194,11 +194,7 @@ $SortAndDrawInPosh.RunspacePool = $Runspace
             $Timeout = 0
             $TimedOut = $true
             
-            Try{
-                If($F.Value.BackColor -ne $T.BG){
-                    $F.Value.BackColor = $T.BG
-                }
-            }Catch{}
+            Try{If($F.Value.BackColor -ne $T.BG){$F.Value.BackColor = $T.BG}}Catch{}
 
             $F.Value.Refresh()
             If(!$T.Clear){
@@ -224,12 +220,12 @@ $CommsPosh.RunspacePool = $Runspace
     param($T)
 
     $Streams = @()
-    If(!$T.Server){
+    If(!$T.Remote){
         $Srv = [System.Net.Sockets.TcpListener]::new("0.0.0.0", 42069)
         Try{$Srv.Start()}Catch{[Console]::WriteLine($Error[0])}
     }Else{
         Try{
-            $Client = [System.Net.Sockets.TcpClient]::New($T.Server, 42069)
+            $Client = [System.Net.Sockets.TcpClient]::New($T.Remote, 42069)
             $Stream = $Client.GetStream()
             $Streams+=$Stream
         }Catch{}
@@ -237,21 +233,10 @@ $CommsPosh.RunspacePool = $Runspace
 
     $Buff = [Byte[]]::new(1024)
     While(!$T.Disposed){
-        If(!$T.Server -and $Srv.Pending()){$Streams+=$Srv.AcceptTcpClientAsync().Result.GetStream()}
+        If(!$T.Remote -and $Srv.Pending()){$Streams+=$Srv.AcceptTcpClientAsync().Result.GetStream()}
 
-        $OutObj = "A"+[String]::Join("L", $T.FlattenedLines.ToArray())+"Z"
-        If($T.Clear){$OutObj = "AEMPTYZ";$T.Clear = $false}
-        If($T.Back){$OutObj = "ABACK$($T.BG.ToArgb().ToString())Z";$T.Back = $false}
-        $OutObj = [System.Text.Encoding]::UTF8.GetBytes($OutObj)
-
-        $BG = [System.Drawing.Color]::Black
-
-        ForEach($Stream in $Streams){
-            If($T.DeltaOut){$Stream.Write($OutObj, 0, $OutObj.Length)}
-        }
-
-        $Clear = $false
         $Back = $false
+        $Clear = $false
         ForEach($Stream in $Streams){
             If($Stream.DataAvailable){
                 $InObj = ""
@@ -260,10 +245,24 @@ $CommsPosh.RunspacePool = $Runspace
                     $InObj+=[System.Text.Encoding]::UTF8.GetString($Buff[0..($InCount-1)])
                 }
 
-                If($Clear -or $T.Clear){$InObj="X"}
+                If($Clear -or $T.Clear){
+                    $InObj=""
+                    $Clear = $true
+
+                    ForEach($X in $Streams){While($X.DataAvailable){[Void]$X.Read($Buff, 0, 1024)}}
+
+                    $T.Clear = $true
+                    $T.Lines.Clear()
+                    $T.FlattenedLines.Clear()
+                    $T.Lines.Add($T.BlankLine)
+                    $T.FlattenedLines.Add($T.FlatBlankLine)
+                    
+                    $T.DeltaIn = $true
+                    If(!$T.Remote){$T.DeltaOut = $true}
+                }
 
                 Try{
-                    If($InObj -match "A" -and $InObj -match "Z"){
+                    If($InObj -match "A" -and $InObj -match "Z" -and !$Clear -and !$T.Clear){
                         ForEach($Line in ($InObj -replace "^.*?A" -replace "Z.*").Split("L")){
                             If(!$T.FlattenedLines.Contains($Line) -and $Line -ne "EMPTY" -and $Line -notmatch "^BACK"){
                                 $T.FlattenedLines.Add($Line)
@@ -299,28 +298,43 @@ $CommsPosh.RunspacePool = $Runspace
                 }
             }
         }
-        $T.DeltaOut = $false
 
         If($Clear){
+            ForEach($X in $Streams){While($X.DataAvailable){[Void]$X.Read($Buff, 0, 1024)}}
+
+            $T.Clear = $true
             $T.Lines.Clear()
             $T.FlattenedLines.Clear()
             $T.Lines.Add($T.BlankLine)
             $T.FlattenedLines.Add($T.FlatBlankLine)
-            $T.Clear = $true
 
             $T.DeltaIn = $true
-            If(!$T.Server){$T.DeltaOut = $true}
+            If(!$T.Remote){$T.DeltaOut = $true}
         }ElseIf($Back){
             $T.BG = $BG
             $T.Back = $true
 
             $T.DeltaIn = $true
-            If(!$T.Server){$T.DeltaOut = $true}
-        }ElseIf(!$T.Server){
+            If(!$T.Remote){$T.DeltaOut = $true}
+        }ElseIf(!$T.Remote -and !$T.DeltaOut){
             $T.DeltaOut = $T.DeltaIn
         }
 
-        Sleep -Milliseconds 250
+        $OutObj = "A"+[String]::Join("L", $T.FlattenedLines.ToArray())+"Z"
+        If($T.Clear){$OutObj = "AEMPTYZ"}
+        If($T.Back){$OutObj = "ABACK$($T.BG.ToArgb().ToString())Z"}
+        $OutObj = [System.Text.Encoding]::UTF8.GetBytes($OutObj)
+        If($T.DeltaOut){
+            ForEach($Stream in $Streams){
+                $Stream.Write($OutObj, 0, $OutObj.Length)
+            }
+        }
+
+        $T.Back = $false
+        $T.Clear = $false
+        $T.DeltaOut = $false
+
+        Sleep -Milliseconds 50
     }
 
     ForEach($Stream in $Streams){$Stream.Close;$Stream.Dispose()}
