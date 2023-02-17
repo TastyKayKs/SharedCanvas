@@ -61,7 +61,7 @@ $Form.Add_MouseDown({
 })
 $Form.Add_MouseMove({
     If($Script:Hashtable.Drawing){
-        Sleep -Milliseconds 10
+        #Sleep -Milliseconds 10
         
         $Script:CurrPos = $Form.PointToClient([System.Windows.Forms.Cursor]::Position)
         If($Script:CurrPos.X -ne $Script:LastPos.X -or $Script:CurrPos.Y -ne $Script:LastPos.Y){
@@ -98,14 +98,13 @@ $Clear.Text = "Clear"
 $Clear.Left = 75
 $Clear.Width = 75
 $Clear.Add_Click({
-    $Script:HashTable.Lines = [System.Collections.ArrayList]::new()
-    $Script:HashTable.FlattenedLines = [System.Collections.ArrayList]::new()
+    $Script:HashTable.Lines.Clear()
+    $Script:HashTable.FlattenedLines.Clear()
     $Script:HashTable.Lines.Add($Script:HashTable.BlankLine)
     $Script:HashTable.FlattenedLines.Add($Script:HashTable.FlatBlankLine)
     $Script:HashTable.Clear = $true
+    $Script:HashTable.DeltaIn = $true
     $Script:HashTable.DeltaOut = $true
-
-    $Form.Refresh()
 })
 $Clear.BackColor = $Form.BackColor
 $Clear.Parent = $Form
@@ -124,11 +123,19 @@ $BGColor.Add_Click({
     $Script:HashTable.Back = $true
     $Script:HashTable.DeltaIn = $true
     $Script:HashTable.DeltaOut = $true
-
-    $Form.Refresh()
 })
 $BGColor.BackColor = $Form.BackColor
 $BGColor.Parent = $Form
+
+$Refresh = [System.windows.Forms.Button]::new()
+$Refresh.Text = "Refresh"
+$Refresh.Left = 225
+$Refresh.Width = 75
+$Refresh.Add_Click({
+    $Script:HashTable.DeltaIn = $true
+})
+$Refresh.BackColor = $Form.BackColor
+$Refresh.Parent = $Form
 
 $Color = [System.windows.Forms.Button]::new()
 $Color.Text = "Color"
@@ -187,14 +194,17 @@ $SortAndDrawInPosh.RunspacePool = $Runspace
             $Timeout = 0
             $TimedOut = $true
             
-            $F.Value.Refresh()
             Try{
                 If($F.Value.BackColor -ne $T.BG){
                     $F.Value.BackColor = $T.BG
                 }
             }Catch{}
-            ForEach($Line in $T.Lines){
-                $J.Value.DrawLines($Line.Pen, $Line.Pts)
+
+            $F.Value.Refresh()
+            If(!$T.Clear){
+                ForEach($Line in $T.Lines){
+                    $J.Value.DrawLines($Line.Pen, $Line.Pts)
+                }
             }
             $T.DeltaIn = $false
         }
@@ -236,17 +246,22 @@ $CommsPosh.RunspacePool = $Runspace
 
         $BG = [System.Drawing.Color]::Black
 
+        ForEach($Stream in $Streams){
+            If($T.DeltaOut){$Stream.Write($OutObj, 0, $OutObj.Length)}
+        }
+
         $Clear = $false
         $Back = $false
         ForEach($Stream in $Streams){
-            If($T.DeltaOut){$Stream.Write($OutObj, 0, $OutObj.Length)}
-                
             If($Stream.DataAvailable){
                 $InObj = ""
                 While($Stream.DataAvailable){
                     $InCount = $Stream.Read($Buff, 0, 1024)
                     $InObj+=[System.Text.Encoding]::UTF8.GetString($Buff[0..($InCount-1)])
                 }
+
+                If($Clear -or $T.Clear){$InObj="X"}
+
                 Try{
                     If($InObj -match "A" -and $InObj -match "Z"){
                         ForEach($Line in ($InObj -replace "^.*?A" -replace "Z.*").Split("L")){
@@ -287,8 +302,8 @@ $CommsPosh.RunspacePool = $Runspace
         $T.DeltaOut = $false
 
         If($Clear){
-            $T.Lines = [System.Collections.ArrayList]::new()
-            $T.FlattenedLines = [System.Collections.ArrayList]::new()
+            $T.Lines.Clear()
+            $T.FlattenedLines.Clear()
             $T.Lines.Add($T.BlankLine)
             $T.FlattenedLines.Add($T.FlatBlankLine)
             $T.Clear = $true
