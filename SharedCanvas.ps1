@@ -98,13 +98,17 @@ $Clear.Text = "Clear"
 $Clear.Left = 75
 $Clear.Width = 75
 $Clear.Add_Click({
-    $Script:HashTable.Lines.Clear()
-    $Script:HashTable.FlattenedLines.Clear()
-    $Script:HashTable.Lines.Add($Script:HashTable.BlankLine)
-    $Script:HashTable.FlattenedLines.Add($Script:HashTable.FlatBlankLine)
-    $Script:HashTable.Clear = $true
-    $Script:HashTable.DeltaIn = $true
-    $Script:HashTable.DeltaOut = $true
+    For($i = 0; $i -lt 4; $i++){
+        $Script:HashTable.Lines.Clear()
+        $Script:HashTable.FlattenedLines.Clear()
+        $Script:HashTable.Lines.Add($Script:HashTable.BlankLine)
+        $Script:HashTable.FlattenedLines.Add($Script:HashTable.FlatBlankLine)
+        $Script:HashTable.Clear = $true
+        $Script:HashTable.DeltaIn = $true
+        $Script:HashTable.DeltaOut = $true
+
+        While($Script:HashTable.DeltaOut){Sleep -Milliseconds 10}
+    }
 })
 $Clear.BackColor = $Form.BackColor
 $Clear.Parent = $Form
@@ -180,33 +184,42 @@ $SortAndDrawInPosh.RunspacePool = $Runspace
     $TimedOut = $false
 
     While(!$T.Disposed){
-        Try{
-            $Sort = @($T.FlattenedLines | Sort {[int64]$_.Split("T")[0]})
-            If(!$T.Clear -and ($T.DeltaIn -or ![System.Linq.Enumerable]::SequenceEqual($T.FlattenedLines, $Sort))){
-                $T.FlattenedLines = [System.Collections.ArrayList]::new($Sort)
-                $T.Lines = [System.Collections.ArrayList]::new(($T.Lines | Sort {$_.TS}))
-                $T.DeltaIn = $true
-            }
-        }Catch{}
-        
-        If($T.DeltaIn -or $T.Drawing){$TimedOut = $false}
-        If($T.DeltaIn -or $Timeout -ge 300 -and !$T.Drawing -and !$TimedOut){
-            $Timeout = 0
-            $TimedOut = $true
-            
-            Try{If($F.Value.BackColor -ne $T.BG){$F.Value.BackColor = $T.BG}}Catch{}
+        If(!$T.Clear){
+            Try{
+                $SortFlat = @($T.FlattenedLines | Sort {[int64]$_.Split("T")[0]})
+                If($T.DeltaIn -or (![System.Linq.Enumerable]::SequenceEqual($T.FlattenedLines, $SortFlat) -and $SortFlat.Count -eq $T.FlattenedLines.Count)){
+                    Try{
+                        $SortLines = @($T.Lines | Sort {$_.TS})
+                        $T.FlattenedLines.Clear()
+                        $T.FlattenedLines.AddRange($SortFlat)
+                        $T.Lines.Clear()
+                        $T.Lines.AddRange($SortLines)
+                    }Catch{
+                        [Console]::WriteLine($Error[0])
+                    }
 
-            $F.Value.Refresh()
-            If(!$T.Clear){
+                    $T.DeltaIn = $true
+                }
+            }Catch{}
+        
+            If($T.DeltaIn -or $T.Drawing){$TimedOut = $false}
+            If($T.DeltaIn -or $Timeout -ge 300 -and !$T.Drawing -and !$TimedOut){
+                $Timeout = 0
+                $TimedOut = $true
+            
+                Try{If($F.Value.BackColor -ne $T.BG){$F.Value.BackColor = $T.BG}}Catch{}
+
+                $F.Value.Refresh()
                 ForEach($Line in $T.Lines){
                     $J.Value.DrawLines($Line.Pen, $Line.Pts)
                 }
+                $T.DeltaIn = $false
             }
-            $T.DeltaIn = $false
-        }
-        Sleep -Milliseconds 10
 
-        $Timeout++
+            $Timeout++
+        }
+
+        Sleep -Milliseconds 10
     }
 })
 [Void]$SortAndDrawInPosh.AddParameter('F',[ref]$Form)
