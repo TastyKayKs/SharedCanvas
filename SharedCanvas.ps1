@@ -185,7 +185,10 @@ $SortAndDrawInPosh.RunspacePool = $Runspace
 
     While(!$T.Disposed){
         If(!$T.Clear){
+            $Entered = $false
             Try{
+                [System.Threading.Monitor]::Enter($T)
+                $Entered = $true
                 $SortFlat = @($T.FlattenedLines | Sort {[int64]$_.Split("T")[0]})
                 If($T.DeltaIn -or (![System.Linq.Enumerable]::SequenceEqual($T.FlattenedLines, $SortFlat) -and $SortFlat.Count -eq $T.FlattenedLines.Count)){
                     Try{
@@ -200,10 +203,12 @@ $SortAndDrawInPosh.RunspacePool = $Runspace
 
                     $T.DeltaIn = $true
                 }
-            }Catch{}
+            }Catch{}Finally{
+                [System.Threading.Monitor]::Exit($T)
+            }
         
             If($T.DeltaIn -or $T.Drawing){$TimedOut = $false}
-            If($T.DeltaIn -or $Timeout -ge 300 -and !$T.Drawing -and !$TimedOut){
+            If($Entered -and ($T.DeltaIn -or $Timeout -ge 300 -and !$T.Drawing -and !$TimedOut)){
                 $Timeout = 0
                 $TimedOut = $true
             
