@@ -1,4 +1,4 @@
-$Remote = ""
+$Remote = "" # leave blank to become a host, set to the IP of a remote server to connect to a host, 1 host per canvas
 
 $lol = $false
 
