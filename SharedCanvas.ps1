@@ -1,4 +1,3 @@
-#https://v.redd.it/b3dbd5ceoija1
 $Remote = ""
 
 $lol = $false
