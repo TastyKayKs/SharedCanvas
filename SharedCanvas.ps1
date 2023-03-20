@@ -1,10 +1,15 @@
-$Remote = "" # leave blank to become a host, set to the IP of a remote server to connect to a host, 1 host per canvas
+$Remote = ""
 
 $lol = $false
 
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
 [System.Windows.Forms.Application]::VisualStyleState = [System.Windows.Forms.VisualStyles.VisualStyleState]::NoneEnabled
+
+$Script:LastPos = [System.Drawing.Point]::new(0,0)
+$Script:CurrPos = [System.Drawing.Point]::new(0,0)
+$Script:Points = [System.Drawing.Point[]]@()
+$Script:Pen = [System.Drawing.Pen]::new([System.Drawing.Color]::Black)
 
 $Script:HashTable = [HashTable]::Synchronized(@{})
 $Script:HashTable.Lines = [System.Collections.ArrayList]::new()
@@ -15,14 +20,10 @@ $Script:HashTable.DeltaOut = $false
 $Script:HashTable.Drawing = $false
 $Script:HashTable.Clear = $false
 $Script:HashTable.Remote = $Remote
-#Set just before launch
-$Script:HashTable.BlankLine = $null
-$Script:HashTable.FlatBlankLine = $null
-
-$Script:LastPos = [System.Drawing.Point]::new(0,0)
-$Script:CurrPos = [System.Drawing.Point]::new(0,0)
-$Script:Points = [System.Drawing.Point[]]@()
-$Script:Pen = [System.Drawing.Pen]::new([System.Drawing.Color]::Black)
+$Script:HashTable.BlankLine = @{TS=0;Pen=$Script:Pen.Clone();Pts=[System.Drawing.Point[]]@([System.Drawing.Point]::new(0,0),[System.Drawing.Point]::new(0,0))}
+$Script:HashTable.FlatBlankLine = [String]("0T-16777216C1W0X0Y0X0")
+[Void]$Script:HashTable.Lines.Add($Script:HashTable.BlankLine)
+[Void]$Script:HashTable.FlattenedLines.Add($Script:HashTable.FlatBlankLine)
 
 $CPUs = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
 If($CPUs -lt 2){$CPUs = 2} #Lol, trash computers
@@ -360,12 +361,6 @@ $CommsPosh.RunspacePool = $Runspace
 })
 [Void]$CommsPosh.AddParameter('T',$Script:HashTable)
 $CommsJob=$CommsPosh.BeginInvoke()
-
-$Script:HashTable.BlankLine = @{TS=0;Pen=$Script:Pen.Clone();Pts=[System.Drawing.Point[]]@([System.Drawing.Point]::new(0,0),[System.Drawing.Point]::new(0,0))}
-$Script:HashTable.FlatBlankLine = [String]("0T-16777216C1W0X0Y0X0")
-
-[Void]$Script:HashTable.Lines.Add($Script:HashTable.BlankLine)
-[Void]$Script:HashTable.FlattenedLines.Add($Script:HashTable.FlatBlankLine)
 
 $Form.ShowDialog()
 $Form.Dispose()
