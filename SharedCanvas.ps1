@@ -57,7 +57,7 @@ $Form.Add_MouseDown({
         $Script:Pen.Color = $Color.BackColor
         $Script:Pen.Width = $Size.Value
 
-        $Script:Points = [System.Drawing.Point[]]@()
+        $Script:Points.Clear()
     }
 })
 $Form.Add_MouseMove({
